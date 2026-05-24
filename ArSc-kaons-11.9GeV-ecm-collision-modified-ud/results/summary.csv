@@ -1,0 +1,32 @@
+key,value
+n_events,446365
+n_particles_seen,165850545
+ycut,1.0
+y_shift,0.0
+input_frame,cm
+collision_mode,collider
+analysis_frame,cm
+ecm_snn_gev,11.9
+beam_kinetic_agev,
+collision_system,Ar40+Sc45
+beam_label,"sqrt(s_NN)=11.9 GeV, collider mode, modified"
+k0_mode,strong
+k0s_codes,"(311, -311)"
+neutral_scale_for_K0S,0.5
+Kplus_raw_total,2602148
+Kplus_total,2602148.0
+Kplus_raw_in_window,1539824
+Kplus_in_window,1539824.0
+Kplus_per_event_in_window,3.4496969968523516
+Kminus_raw_total,1488718
+Kminus_total,1488718.0
+Kminus_raw_in_window,1035149
+Kminus_in_window,1035149.0
+Kminus_per_event_in_window,2.319063994712847
+K0S_raw_total,3523985
+K0S_total,1761992.5
+K0S_raw_in_window,2238804
+K0S_in_window,1119402.0
+K0S_per_event_in_window,2.5078175932252753
+R_integrated,1.1501556188036113
+R_integrated_err,0.0010510060410515879
