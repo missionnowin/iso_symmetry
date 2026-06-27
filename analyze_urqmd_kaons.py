@@ -44,6 +44,7 @@ In --outdir:
   y_distributions.csv / .png            (K+, K-, K0_S; three species)
   y_distributions_meancharged.csv/.png  (NEW: (K+ + K-)/2 vs 2*K0_S)
   ratio_pt.csv / .png
+  ratio_y.csv / .png                    (NEW: R_K(y) isospin ratio vs rapidity)
   mean_kaon_y.csv / .png                (K+, K-, K0_S, (K+ + K-)/2 combined)
   summary.csv
 """
@@ -59,9 +60,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 import numpy as np
-
 import matplotlib
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -76,6 +75,13 @@ PDG_K0S = 310
 PDG_K0 = 311
 PDG_K0BAR = -311
 
+CHARGED_ACTIVITY_PDGS = {
+    11, -11, 13, -13, 15, -15,
+    211, -211, 321, -321, 2212, -2212,
+    3112, -3112, 3222, -3222, 3312, -3312, 3334, -3334,
+    1114, -1114, 2114, -2114, 2214, -2214, 2224, -2224,
+    24, -24,
+}
 
 @dataclass
 class Particle:
@@ -144,9 +150,9 @@ def _parse_particle_line(tokens: List[str], layout: str) -> Optional[Particle]:
                 py = float(tokens[6])
                 pz = float(tokens[7])
                 E = float(tokens[8])
-                #mass_shell = E * E - (px * px + py * py + pz * pz)
-                #if E > 0.0 and abs(mass_shell - m * m) < max(1.0, 5.0 * m * m + 1.0):
-                return Particle(pdg, px, py, pz, E)
+                mass_shell = E * E - (px * px + py * py + pz * pz)
+                if E > 0.0 and abs(mass_shell - m * m) < max(1.0, 5.0 * m * m + 1.0):
+                    return Particle(pdg, px, py, pz, E)
             except ValueError:
                 pass
 
@@ -223,7 +229,7 @@ def stream_events(path: Path, layout: str) -> Iterable[List[Particle]]:
                 particle = _parse_particle_line(tokens, layout)
                 if particle is not None:
                     particles.append(particle)
-                read += 1
+                    read += 1
 
             if particles:
                 yield particles
@@ -344,20 +350,74 @@ def make_edges(nbins: int, lo: float, hi: float) -> np.ndarray:
     return np.linspace(lo, hi, nbins + 1)
 
 
+def event_activity(particles: List[Particle], y_max_abs: Optional[float] = None) -> int:
+    n = 0
+    for p in particles:
+        if p.pdg not in CHARGED_ACTIVITY_PDGS:
+            continue
+        if y_max_abs is not None:
+            y = p.rapidity()
+            if not math.isfinite(y) or abs(y) > y_max_abs:
+                continue
+        n += 1
+    return n
+
+
+def select_events_by_activity(
+    path: Path,
+    layout: str,
+    top_fraction: Optional[float],
+    activity_y_max: Optional[float],
+) -> tuple[Optional[set[int]], dict]:
+    if top_fraction is None:
+        return None, {
+            "enabled": False,
+            "requested_fraction": None,
+            "selected_events": None,
+            "total_events_seen": None,
+            "threshold_activity": None,
+            "activity_y_max": activity_y_max,
+        }
+
+    if not (0.0 < top_fraction <= 1.0):
+        raise ValueError("--centrality-top-fraction must be in the interval (0, 1]")
+
+    activities = []
+    idx = 0
+    for particles in stream_events(path, layout):
+        idx += 1
+        activities.append((event_activity(particles, activity_y_max), idx))
+
+    total = len(activities)
+    if total == 0:
+        return set(), {
+            "enabled": True,
+            "requested_fraction": top_fraction,
+            "selected_events": 0,
+            "total_events_seen": 0,
+            "threshold_activity": None,
+            "activity_y_max": activity_y_max,
+        }
+
+    keep = max(1, int(math.ceil(top_fraction * total)))
+    activities.sort(reverse=True)
+    selected = activities[:keep]
+    selected_ids = {idx for _, idx in selected}
+    threshold = selected[-1][0] if selected else None
+
+    return selected_ids, {
+        "enabled": True,
+        "requested_fraction": top_fraction,
+        "selected_events": len(selected_ids),
+        "total_events_seen": total,
+        "threshold_activity": threshold,
+        "activity_y_max": activity_y_max,
+    }
+
+
 def _resolve_k0_mode(path: Path, layout: str, requested: str) -> tuple[str, dict]:
-    """Decide which neutral-kaon PDG codes to use.
-
-    Returns (mode, info) where info is a small diagnostic dict.
-
-    mode == "strong" : use PDG +/-311, neutral_scale = 0.5
-    mode == "weak"   : use PDG 310,     neutral_scale = 1.0
-
-    For requested == 'auto', a quick pre-scan of up to 2000 events decides
-    based on whether the file contains 310 or +/-311 codes.
-    """
     if requested in ("strong", "weak"):
-        info = {"requested": requested, "scanned_events": 0,
-                "n_310": 0, "n_311": 0, "n_m311": 0}
+        info = {"requested": requested, "scanned_events": 0, "n_310": 0, "n_311": 0, "n_m311": 0}
         return requested, info
 
     n_310 = n_311 = n_m311 = 0
@@ -374,9 +434,7 @@ def _resolve_k0_mode(path: Path, layout: str, requested: str) -> tuple[str, dict
         if scanned >= 2000:
             break
 
-    info = {"requested": "auto", "scanned_events": scanned,
-            "n_310": n_310, "n_311": n_311, "n_m311": n_m311}
-
+    info = {"requested": "auto", "scanned_events": scanned, "n_310": n_310, "n_311": n_311, "n_m311": n_m311}
     has_strong = (n_311 + n_m311) > 0
     has_weak = n_310 > 0
 
@@ -385,17 +443,13 @@ def _resolve_k0_mode(path: Path, layout: str, requested: str) -> tuple[str, dict
     if has_weak and not has_strong:
         return "weak", info
     if has_strong and has_weak:
-        # Both present in the same file is unusual; prefer strong (UrQMD native)
-        # but warn loudly.
         print(
-            f"[warning] file contains BOTH K0_S (PDG 310) and K0/Kbar0 (PDG +/-311) "
-            f"in the first {scanned} events. Defaulting to 'strong' "
-            f"(0.5*(N_311 + N_-311)) to avoid double counting. "
+            f"[warning] file contains BOTH K0_S (PDG 310) and K0/Kbar0 (PDG +/-311) in the first {scanned} events. "
+            f"Defaulting to 'strong' (0.5*(N_311 + N_-311)) to avoid double counting. "
             f"Use --k0-mode weak explicitly if you want N_310 instead.",
             file=sys.stderr,
         )
         return "strong", info
-    # Nothing seen yet — default to strong (UrQMD convention).
     return "strong", info
 
 
@@ -410,6 +464,7 @@ def analyze(
     y_min: float,
     y_max: float,
     k0_mode: str,
+    selected_event_ids: Optional[set[int]] = None,
 ) -> dict:
     pt_edges = make_edges(pt_bins, 0.0, pt_max)
     y_edges = make_edges(y_bins, y_min, y_max)
@@ -436,8 +491,12 @@ def analyze(
 
     n_events = 0
     n_particles_seen = 0
+    n_events_seen_total = 0
 
     for particles in stream_events(path, layout):
+        n_events_seen_total += 1
+        if selected_event_ids is not None and n_events_seen_total not in selected_event_ids:
+            continue
         n_events += 1
         for particle in particles:
             n_particles_seen += 1
@@ -472,6 +531,7 @@ def analyze(
 
     return {
         "n_events": n_events,
+        "n_events_seen_total": n_events_seen_total,
         "n_particles_seen": n_particles_seen,
         "pt_edges": pt_edges,
         "y_edges": y_edges,
@@ -501,29 +561,7 @@ def write_csv(path: Path, header: List[str], rows: Iterable[List]) -> None:
 
 
 def _label(name: str) -> str:
-    return {
-        "Kplus": r"$K^+$",
-        "Kminus": r"$K^-$",
-        "K0S": r"$K^0_S$",
-    }.get(name, name)
-
-
-def _format_system(system: str) -> str:
-    s = system.strip().replace(" ", "")
-    labels = {
-        "12C+12C": r"$^{12}$C+$^{12}$C",
-        "C12+C12": r"$^{12}$C+$^{12}$C",
-        "C12C12": r"$^{12}$C+$^{12}$C",
-        "Xe124+W184": r"$^{124}$Xe+$^{184}$W",
-        "124Xe+184W": r"$^{124}$Xe+$^{184}$W",
-        "Xe+W": r"Xe+W",
-        "Xe124+Xe124": r"$^{124}$Xe+$^{124}$Xe",
-        "124Xe+124Xe": r"$^{124}$Xe+$^{124}$Xe",
-        "Xe+Xe": r"Xe+Xe",
-        "d+d": r"d+d",
-        "D+D": r"d+d",
-    }
-    return labels.get(s, system)
+    return {"Kplus": r"$K^+$", "Kminus": r"$K^-$", "K0S": r"$K^0_S$"}.get(name, name)
 
 
 def _format_nev(n_events: int) -> str:
@@ -533,25 +571,24 @@ def _format_nev(n_events: int) -> str:
 
 
 def _analysis_y_label(res: dict) -> str:
-    if abs(float(res.get("y_shift", 0.0))) < 1e-12:
-        return "y"
-    return r"y-y_{cm}"
+    #if abs(float(res.get("y_shift", 0.0))) < 1e-12:
+     #   return "y"
+    #return r"y-y_{cm}"
+    return "y"
 
 
 def _add_plot_info(ax, res: dict, loc: str = "lower left") -> None:
-    system = _format_system(str(res.get("collision_system", ""))).strip()
+    system = str(res.get("collision_system", "")).strip()
     beam = str(res.get("beam_label", "")).strip()
     nev = _format_nev(int(res.get("n_events", 0)))
     parts = [part for part in (system, beam, f"$N_{{evt}}={nev}$") if part]
     text = ", ".join(parts)
-
     xy = {
         "lower left": (0.03, 0.05, "left", "bottom"),
         "upper left": (0.03, 0.95, "left", "top"),
         "lower right": (0.97, 0.05, "right", "bottom"),
         "upper right": (0.97, 0.95, "right", "top"),
     }.get(loc, (0.03, 0.05, "left", "bottom"))
-
     ax.text(
         xy[0], xy[1], text,
         transform=ax.transAxes,
@@ -562,7 +599,7 @@ def _add_plot_info(ax, res: dict, loc: str = "lower left") -> None:
 
 
 # ---------------------------------------------------------------------------
-# pT spectra (K+, K-, K0S) -- unchanged
+# pT spectra (K+, K-, K0S) 
 # ---------------------------------------------------------------------------
 
 
@@ -572,16 +609,13 @@ def save_pt_spectra(outdir: Path, res: dict, normalize: bool) -> None:
     widths = np.diff(edges)
     nev = max(res["n_events"], 1)
     rows = []
-
     fig, ax = plt.subplots(figsize=(7, 5))
     ylabel = "counts"
-
     for name in ("Kplus", "Kminus", "K0S"):
         raw = res["pt_counts"][name].astype(float)
         scale = res.get("neutral_scale", 1.0) if name == "K0S" else 1.0
         counts = scale * raw
         err = scale * np.sqrt(np.maximum(raw, 0.0))
-
         if normalize:
             yvals = counts / (nev * widths)
             yerr = err / (nev * widths)
@@ -589,15 +623,9 @@ def save_pt_spectra(outdir: Path, res: dict, normalize: bool) -> None:
         else:
             yvals = counts
             yerr = err
-
-        ax.errorbar(centers, yvals, yerr=yerr,
-                    marker="o", ms=4, lw=1.2, capsize=2, label=_label(name))
-
+        ax.errorbar(centers, yvals, yerr=yerr, marker="o", ms=4, lw=1.2, capsize=2, label=_label(name))
         for i, ctr in enumerate(centers):
-            rows.append([name, f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}",
-                         f"{ctr:.4f}", f"{counts[i]:.6e}",
-                         f"{yvals[i]:.6e}", f"{yerr[i]:.6e}"])
-
+            rows.append([name, f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}", f"{counts[i]:.6e}", f"{yvals[i]:.6e}", f"{yerr[i]:.6e}"])
     y_label = _analysis_y_label(res)
     ax.set_xlabel(r"$p_T$ [GeV/c]")
     ax.set_ylabel(ylabel)
@@ -609,10 +637,7 @@ def save_pt_spectra(outdir: Path, res: dict, normalize: bool) -> None:
     fig.tight_layout()
     fig.savefig(outdir / "pt_spectra.png", dpi=140)
     plt.close(fig)
-
-    write_csv(outdir / "pt_spectra.csv",
-              ["species", "pt_lo", "pt_hi", "pt_center", "counts", "value", "error"],
-              rows)
+    write_csv(outdir / "pt_spectra.csv", ["species", "pt_lo", "pt_hi", "pt_center", "counts", "value", "error"], rows)
 
 
 # ---------------------------------------------------------------------------
@@ -632,16 +657,13 @@ def save_y_distributions(outdir: Path, res: dict, normalize: bool) -> None:
     widths = np.diff(edges)
     nev = max(res["n_events"], 1)
     rows = []
-
     fig, ax = plt.subplots(figsize=(7, 5))
     ylabel = "counts"
-
     for name in ("Kplus", "Kminus", "K0S"):
         raw = res["y_counts"][name].astype(float)
         scale = res.get("neutral_scale", 1.0) if name == "K0S" else 1.0
         counts = scale * raw
         err = scale * np.sqrt(np.maximum(raw, 0.0))
-
         if normalize:
             yvals = counts / (nev * widths)
             yerr = err / (nev * widths)
@@ -649,19 +671,11 @@ def save_y_distributions(outdir: Path, res: dict, normalize: bool) -> None:
         else:
             yvals = counts
             yerr = err
-
-        ax.errorbar(centers, yvals, yerr=yerr,
-                    marker="s", ms=4, lw=1.2, capsize=2, label=_label(name))
-
+        ax.errorbar(centers, yvals, yerr=yerr, marker="s", ms=4, lw=1.2, capsize=2, label=_label(name))
         for i, ctr in enumerate(centers):
-            rows.append([name, f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}",
-                         f"{ctr:.4f}", f"{counts[i]:.6e}",
-                         f"{yvals[i]:.6e}", f"{yerr[i]:.6e}"])
-
+            rows.append([name, f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}", f"{counts[i]:.6e}", f"{yvals[i]:.6e}", f"{yerr[i]:.6e}"])
     y_label = _analysis_y_label(res)
-    ax.axvspan(-res["ycut"], res["ycut"],
-               color="grey", alpha=0.10,
-               label=rf"central window $\pm${res['ycut']:.2f}")
+    ax.axvspan(-res["ycut"], res["ycut"], color="grey", alpha=0.10, label=rf"central window $\pm${res['ycut']:.2f}")
     ax.set_xlabel(y_label)
     ax.set_ylabel(ylabel)
     ax.set_title(r"Kaon rapidity distributions: $K^+$, $K^-$, $K^0_S$")
@@ -671,10 +685,7 @@ def save_y_distributions(outdir: Path, res: dict, normalize: bool) -> None:
     fig.tight_layout()
     fig.savefig(outdir / "y_distributions.png", dpi=140)
     plt.close(fig)
-
-    write_csv(outdir / "y_distributions.csv",
-              ["species", "y_lo", "y_hi", "y_center", "counts", "value", "error"],
-              rows)
+    write_csv(outdir / "y_distributions.csv", ["species", "y_lo", "y_hi", "y_center", "counts", "value", "error"], rows)
 
 
 # ---------------------------------------------------------------------------
@@ -699,133 +710,76 @@ def save_y_distributions_meancharged(outdir: Path, res: dict, normalize: bool) -
     widths = np.diff(edges)
     nev = max(res["n_events"], 1)
     neutral_scale = res.get("neutral_scale", 1.0)
-
     kp_raw = res["y_counts"]["Kplus"].astype(float)
     km_raw = res["y_counts"]["Kminus"].astype(float)
     k0_raw = res["y_counts"]["K0S"].astype(float)
-
-    # K0_S yield in counts (already weak-eigenstate equivalent)
     k0s_counts = neutral_scale * k0_raw
-    k0s_err    = neutral_scale * np.sqrt(np.maximum(k0_raw, 0.0))
-
-    # 2 * K0_S
-    two_k0s_counts = 2 * k0s_counts
-    two_k0s_err    = 2 * k0s_err
-
-    # (K+ + K-) / 2
-    mean_raw   = (kp_raw + km_raw)
-    mean_err_raw = np.sqrt(kp_raw + km_raw)  # Poisson on the sum
-
+    k0s_err = neutral_scale * np.sqrt(np.maximum(k0_raw, 0.0))
+    mean_raw = 0.5 * (kp_raw + km_raw)
+    mean_err_raw = 0.5 * np.sqrt(kp_raw + km_raw)
     if normalize:
         div = nev * widths
-        mean_vals    = mean_raw       / div
-        mean_yerr    = mean_err_raw   / div
-        two_k0s_vals = two_k0s_counts / div
-        two_k0s_yerr = two_k0s_err    / div
+        mean_vals = mean_raw / div
+        mean_yerr = mean_err_raw / div
+        k0s_vals = k0s_counts / div
+        k0s_yerr = k0s_err / div
         ylabel = r"$dN/dy$"
     else:
-        mean_vals    = mean_raw;       mean_yerr    = mean_err_raw
-        two_k0s_vals = two_k0s_counts; two_k0s_yerr = two_k0s_err
+        mean_vals = mean_raw
+        mean_yerr = mean_err_raw
+        k0s_vals = k0s_counts
+        k0s_yerr = k0s_err
         ylabel = "counts"
-
     fig, ax = plt.subplots(figsize=(7, 5))
-
-    ax.errorbar(centers, mean_vals, yerr=mean_yerr,
-                marker="D", ms=5, lw=1.6, capsize=2,
-                ls="-", color="C3",
-                label=r"$(K^+ + K^-)/2$")
-    ax.errorbar(centers, two_k0s_vals, yerr=two_k0s_yerr,
-                marker="o", ms=5, lw=1.6, capsize=2,
-                ls="--", color="C2",
-                label=r"$2\,K^0_S$")
-
+    ax.errorbar(centers, mean_vals, yerr=mean_yerr, marker="D", ms=5, lw=1.6, capsize=2, ls="-", color="C3", label=r"$(K^+ + K^-)/2$")
+    ax.errorbar(centers, k0s_vals, yerr=k0s_yerr, marker="o", ms=5, lw=1.6, capsize=2, ls="--", color="C2", label=r"$K^0_S$")
     y_label = _analysis_y_label(res)
-    ax.axvspan(-res["ycut"], res["ycut"],
-               color="grey", alpha=0.10,
-               label=rf"central window $\pm${res['ycut']:.2f}")
+    ax.axvspan(-res["ycut"], res["ycut"], color="grey", alpha=0.10, label=rf"central window $\pm${res['ycut']:.2f}")
     ax.set_xlabel(y_label)
     ax.set_ylabel(ylabel)
-    ax.set_title(r"$(K^+ + K^-)/2$ vs $2 * K^0_S$")
+    ax.set_title(r"$(K^+ + K^-)/2$ vs $K^0_S$")
     _add_plot_info(ax, res, loc="upper left")
     ax.legend()
     ax.grid(True, ls=":", alpha=0.5)
     fig.tight_layout()
     fig.savefig(outdir / "y_distributions_meancharged.png", dpi=140)
     plt.close(fig)
-
     rows = []
     for i, ctr in enumerate(centers):
-        rows.append([
-            f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}",
-            f"{mean_vals[i]:.6e}",    f"{mean_yerr[i]:.6e}",
-            f"{two_k0s_vals[i]:.6e}", f"{two_k0s_yerr[i]:.6e}",
-        ])
-    write_csv(
-        outdir / "y_distributions_meancharged.csv",
-        ["y_lo", "y_hi", "y_center",
-         "KmeanCharged_value", "KmeanCharged_err",
-         "TwoK0S_value", "TwoK0S_err"],
-        rows,
-    )
-
-
-# ---------------------------------------------------------------------------
-# ratio R(pT) -- unchanged
-# ---------------------------------------------------------------------------
+        rows.append([f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}", f"{mean_vals[i]:.6e}", f"{mean_yerr[i]:.6e}", f"{k0s_vals[i]:.6e}", f"{k0s_yerr[i]:.6e}"])
+    write_csv(outdir / "y_distributions_meancharged.csv", ["y_lo", "y_hi", "y_center", "KmeanCharged_value", "KmeanCharged_err", "TwoK0S_value", "TwoK0S_err"], rows)
 
 
 def save_ratio(outdir: Path, res: dict) -> None:
     edges = res["pt_edges"]
     centers = 0.5 * (edges[:-1] + edges[1:])
-
     kp = res["pt_counts"]["Kplus"].astype(float)
     km = res["pt_counts"]["Kminus"].astype(float)
     k0_raw = res["pt_counts"]["K0S"].astype(float)
     neutral_scale = res.get("neutral_scale", 1.0)
     k0 = neutral_scale * k0_raw
-
     num = 0.5 * (kp + km)
     num_var = 0.25 * (kp + km)
     den = k0
     den_var = neutral_scale * neutral_scale * k0_raw
-
     ratio = np.full_like(num, np.nan, dtype=float)
     err = np.full_like(num, np.nan, dtype=float)
     mask = den > 0
-
     ratio[mask] = num[mask] / den[mask]
     n_safe = np.where(num > 0.0, num, 1.0)
     d_safe = np.where(den > 0.0, den, 1.0)
     rel2 = (num_var / (n_safe * n_safe)) + (den_var / (d_safe * d_safe))
     err[mask] = np.abs(ratio[mask]) * np.sqrt(rel2[mask])
-
     rows = []
     for i, ctr in enumerate(centers):
-        rows.append([
-            f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}",
-            int(kp[i]), int(km[i]),
-            f"{k0[i]:.6e}",
-            "" if np.isnan(ratio[i]) else f"{ratio[i]:.6e}",
-            "" if np.isnan(err[i]) else f"{err[i]:.6e}",
-        ])
-
-    write_csv(outdir / "ratio_pt.csv",
-              ["pt_lo", "pt_hi", "pt_center", "K+", "K-", "K0S", "R", "R_err"],
-              rows)
-
+        rows.append([f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}", int(kp[i]), int(km[i]), f"{k0[i]:.6e}", "" if np.isnan(ratio[i]) else f"{ratio[i]:.6e}", "" if np.isnan(err[i]) else f"{err[i]:.6e}"])
+    write_csv(outdir / "ratio_pt.csv", ["pt_lo", "pt_hi", "pt_center", "K+", "K-", "K0S", "R", "R_err"], rows)
     fig, ax = plt.subplots(figsize=(7, 5))
     finite = np.isfinite(ratio)
     ax.axhline(1.0, color="#555555", ls="--", lw=1.1)
-    ax.fill_between([edges[0], edges[-1]], 0.95, 1.05,
-                    color="#20808D", alpha=0.10, lw=0,
-                    label=r"$\pm$5% band")
-
+    ax.fill_between([edges[0], edges[-1]], 0.95, 1.05, color="#20808D", alpha=0.10, lw=0, label=r"$\pm$5% band")
     if finite.any():
-        ax.errorbar(centers[finite], ratio[finite], yerr=err[finite],
-                    marker="o", ms=4, lw=1.2, capsize=2,
-                    color="C3",
-                    label=r"$0.5(K^+ + K^-)/K^0_S$")
-
+        ax.errorbar(centers[finite], ratio[finite], yerr=err[finite], marker="o", ms=4, lw=1.2, capsize=2, color="C3", label=r"$0.5(K^+ + K^-)/K^0_S$")
     y_label = _analysis_y_label(res)
     ax.set_xlabel(r"$p_T$ [GeV/c]")
     ax.set_ylabel(r"$R(p_T) = \frac{1}{2}(K^+ + K^-)/K^0_S$")
@@ -838,107 +792,86 @@ def save_ratio(outdir: Path, res: dict) -> None:
     plt.close(fig)
 
 
+
+
 # ---------------------------------------------------------------------------
-# combined dN/dy with mean charged kaon  (unchanged behaviour)
+# R_K(y)  --  isospin ratio (K+ + K-)/2  /  K0_S  vs rapidity
 # ---------------------------------------------------------------------------
 
 
-def save_mean_kaon_y(outdir: Path, res: dict, normalize: bool) -> None:
+def save_ratio_y(outdir: Path, res: dict) -> None:
+    """Plot and save R_K(y) = 0.5*(K+ + K-) / K0_S as a function of rapidity.
+
+    Under exact isospin symmetry R_K = 1 everywhere.
+    Deviations reveal where charge symmetry is broken across rapidity.
+    Complements save_ratio() which shows the same observable vs p_T.
+    """
     edges = res["y_edges"]
     centers = 0.5 * (edges[:-1] + edges[1:])
-    widths = np.diff(edges)
-    nev = max(res["n_events"], 1)
     neutral_scale = res.get("neutral_scale", 1.0)
 
-    kp_raw = res["y_counts"]["Kplus"].astype(float)
-    km_raw = res["y_counts"]["Kminus"].astype(float)
-    k0_raw = res["y_counts"]["K0S"].astype(float)
+    kp      = res["y_counts"]["Kplus"].astype(float)
+    km      = res["y_counts"]["Kminus"].astype(float)
+    k0_raw  = res["y_counts"]["K0S"].astype(float)
+    k0      = neutral_scale * k0_raw
 
-    k0 = neutral_scale * k0_raw
-    mean_raw = 0.5 * (kp_raw + km_raw)
+    num     = 0.5 * (kp + km)
+    num_var = 0.25 * (kp + km)
+    den_var = neutral_scale * neutral_scale * k0_raw
 
-    kp_err = np.sqrt(kp_raw)
-    km_err = np.sqrt(km_raw)
-    k0_err = neutral_scale * np.sqrt(k0_raw)
-    mean_err_raw = 0.5 * np.sqrt(kp_raw + km_raw)
-
-    if normalize:
-        div = nev * widths
-        kp_vals   = kp_raw   / div
-        km_vals   = km_raw   / div
-        k0_vals   = k0       / div
-        mean_vals = mean_raw / div
-
-        kp_yerr   = kp_err       / div
-        km_yerr   = km_err       / div
-        k0_yerr   = k0_err       / div
-        mean_yerr = mean_err_raw / div
-        ylabel = r"$dN/dy$"
-    else:
-        kp_vals = kp_raw;   kp_yerr   = kp_err
-        km_vals = km_raw;   km_yerr   = km_err
-        k0_vals = k0;       k0_yerr   = k0_err
-        mean_vals = mean_raw; mean_yerr = mean_err_raw
-        ylabel = "counts"
-
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.errorbar(centers, kp_vals, yerr=kp_yerr,
-                marker="^", ms=4, lw=1.2, capsize=2,
-                color="C0", label=r"$K^+$")
-    ax.errorbar(centers, km_vals, yerr=km_yerr,
-                marker="v", ms=4, lw=1.2, capsize=2,
-                color="C1", label=r"$K^-$")
-    ax.errorbar(centers, k0_vals, yerr=k0_yerr,
-                marker="s", ms=4, lw=1.2, capsize=2,
-                color="C2", label=r"$K^0_S$")
-    ax.errorbar(centers, mean_vals, yerr=mean_yerr,
-                marker="D", ms=5, lw=1.6, capsize=2,
-                ls="--", color="C3",
-                label=r"$(K^+ + K^-)/2$")
-
-    y_label = _analysis_y_label(res)
-    ax.axvspan(-res["ycut"], res["ycut"],
-               color="grey", alpha=0.10,
-               label=rf"central window $\pm${res['ycut']:.2f}")
-    ax.set_xlabel(y_label)
-    ax.set_ylabel(ylabel)
-    ax.set_title(r"Kaon $dN/dy$ — charged mean vs. $K^0_S$")
-    _add_plot_info(ax, res, loc="upper left")
-    ax.legend(fontsize=9)
-    ax.grid(True, ls=":", alpha=0.5)
-    fig.tight_layout()
-    fig.savefig(outdir / "mean_kaon_y.png", dpi=140)
-    plt.close(fig)
+    ratio = np.full_like(num, np.nan, dtype=float)
+    err   = np.full_like(num, np.nan, dtype=float)
+    mask  = k0 > 0
+    ratio[mask] = num[mask] / k0[mask]
+    n_safe = np.where(num > 0.0, num, 1.0)
+    d_safe = np.where(k0  > 0.0, k0,  1.0)
+    rel2   = (num_var / (n_safe * n_safe)) + (den_var / (d_safe * d_safe))
+    err[mask] = np.abs(ratio[mask]) * np.sqrt(rel2[mask])
 
     rows = []
     for i, ctr in enumerate(centers):
         rows.append([
-            f"{edges[i]:.4f}", f"{edges[i+1]:.4f}", f"{ctr:.4f}",
-            f"{kp_vals[i]:.6e}", f"{kp_yerr[i]:.6e}",
-            f"{km_vals[i]:.6e}", f"{km_yerr[i]:.6e}",
-            f"{k0_vals[i]:.6e}", f"{k0_yerr[i]:.6e}",
-            f"{mean_vals[i]:.6e}", f"{mean_yerr[i]:.6e}",
+            f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}",
+            int(kp[i]), int(km[i]), f"{k0[i]:.6e}",
+            "" if np.isnan(ratio[i]) else f"{ratio[i]:.6e}",
+            "" if np.isnan(err[i])   else f"{err[i]:.6e}",
         ])
     write_csv(
-        outdir / "mean_kaon_y.csv",
-        ["y_lo", "y_hi", "y_center",
-         "Kplus_value", "Kplus_err",
-         "Kminus_value", "Kminus_err",
-         "K0S_value", "K0S_err",
-         "KmeanCharged_value", "KmeanCharged_err"],
+        outdir / "ratio_y.csv",
+        ["y_lo", "y_hi", "y_center", "K+", "K-", "K0S", "R_K", "R_K_err"],
         rows,
     )
 
-
-# ---------------------------------------------------------------------------
-# Summary
-# ---------------------------------------------------------------------------
-
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.axhline(1.0, color="#555555", ls="--", lw=1.1, label="isospin symmetry ($R_K=1$)")
+    finite = np.isfinite(ratio)
+    if finite.any():
+        ax.errorbar(
+            centers[finite], ratio[finite], yerr=err[finite],
+            marker="s", ms=4, lw=1.2, capsize=2, color="C1",
+            label=r"$R_K = \frac{1}{2}(K^+ + K^-)/K^0_S$",
+        )
+    ax.axvspan(
+        -res["ycut"], res["ycut"],
+        color="grey", alpha=0.10,
+        label=rf"central window $\pm${res['ycut']:.2f}",
+    )
+    y_label = _analysis_y_label(res)
+    ax.set_xlabel(y_label)
+    ax.set_ylabel(r"$R_K(y)$")
+    ax.set_title(r"Isospin ratio $R_K(y) = \frac{1}{2}(K^+ + K^-)\,/\,K^0_S$")
+    _add_plot_info(ax, res, loc="lower right")
+    ax.legend(fontsize=8)
+    ax.grid(True, ls=":", alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(outdir / "ratio_y.png", dpi=140)
+    plt.close(fig)
 
 def save_summary(outdir: Path, res: dict) -> None:
     nev = max(res["n_events"], 1)
     rows = [
         ["n_events", res["n_events"]],
+        ["n_events_seen_total", res.get("n_events_seen_total", res["n_events"])],
         ["n_particles_seen", res["n_particles_seen"]],
         ["ycut", res["ycut"]],
         ["y_shift", res.get("y_shift", 0.0)],
@@ -952,55 +885,42 @@ def save_summary(outdir: Path, res: dict) -> None:
         ["k0_mode", res.get("k0_mode", "")],
         ["k0s_codes", str(res.get("k0s_codes", ""))],
         ["neutral_scale_for_K0S", res.get("neutral_scale", 1.0)],
+        ["centrality_top_fraction", res.get("centrality_top_fraction", "")],
+        ["centrality_activity_ymax", res.get("centrality_activity_ymax", "")],
+        ["centrality_selected_events", res.get("centrality_selected_events", "")],
+        ["centrality_total_events_seen", res.get("centrality_total_events_seen", "")],
+        ["centrality_threshold_activity", res.get("centrality_threshold_activity", "")],
     ]
-
     for name in ("Kplus", "Kminus", "K0S"):
         scale = res.get("neutral_scale", 1.0) if name == "K0S" else 1.0
         rows.append([f"{name}_raw_total", res["total_yield"][name]])
         rows.append([f"{name}_total", scale * res["total_yield"][name]])
         rows.append([f"{name}_raw_in_window", res["yield_in_window"][name]])
         rows.append([f"{name}_in_window", scale * res["yield_in_window"][name]])
-        rows.append([f"{name}_per_event_in_window",
-                     scale * res["yield_in_window"][name] / nev])
-
+        rows.append([f"{name}_per_event_in_window", scale * res["yield_in_window"][name] / nev])
     kp = res["yield_in_window"]["Kplus"]
     km = res["yield_in_window"]["Kminus"]
     neutral_scale = res.get("neutral_scale", 1.0)
     k0_raw = res["yield_in_window"]["K0S"]
     k0 = neutral_scale * k0_raw
-
     if k0 > 0.0:
         R = 0.5 * (kp + km) / k0
         den_var = neutral_scale * neutral_scale * k0_raw
-        sR = abs(R) * math.sqrt(
-            0.25 * (kp + km) / max((0.5 * (kp + km)) ** 2, 1e-30)
-            + den_var / max(k0 * k0, 1e-30)
-        )
+        sR = abs(R) * math.sqrt(0.25 * (kp + km) / max((0.5 * (kp + km)) ** 2, 1e-30) + den_var / max(k0 * k0, 1e-30))
         rows.append(["R_integrated", R])
         rows.append(["R_integrated_err", sR])
     else:
         rows.append(["R_integrated", ""])
         rows.append(["R_integrated_err", ""])
-
     write_csv(outdir / "summary.csv", ["key", "value"], rows)
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Analyze UrQMD .f19 / OSCAR-like output for kaon spectra and R(pT)."
-    )
+    parser = argparse.ArgumentParser(description="Analyze UrQMD .f19 / OSCAR-like output for kaon spectra and R(pT).")
     parser.add_argument("input", help="Path to UrQMD .f19 / OSCAR file")
     parser.add_argument("-o", "--outdir", default="urqmd_kaon_out")
-    parser.add_argument("--input-frame", choices=("projectile", "target", "cm"),
-                        default="target")
-    parser.add_argument("--collision-mode",
-                        choices=("fixed-target", "fixed", "collider"),
-                        default="fixed-target")
+    parser.add_argument("--input-frame", choices=("projectile", "target", "cm"), default="target")
+    parser.add_argument("--collision-mode", choices=("fixed-target", "fixed", "collider"), default="fixed-target")
     parser.add_argument("--y-shift", type=float, default=None)
     parser.add_argument("--beam-kinetic-agev", type=float, default=None)
     parser.add_argument("--ecm-snn", type=float, default=None)
@@ -1010,82 +930,47 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--y-bins", type=int, default=20)
     parser.add_argument("--y-min", type=float, default=-2.0)
     parser.add_argument("--y-max", type=float, default=2.0)
-    parser.add_argument("--layout",
-                        choices=("auto", "oscar1992a", "oscar1997a"),
-                        default="auto")
+    parser.add_argument("--layout", choices=("auto", "oscar1992a", "oscar1997a"), default="auto")
     parser.add_argument("--no-normalize", action="store_true")
-    parser.add_argument(
-        "--k0-mode",
-        choices=("auto", "strong", "weak"),
-        default="auto",
-        help=(
-            "How to count K0_S. 'strong' (correct for UrQMD .f19): "
-            "K0_S = 0.5*(N_311 + N_-311). 'weak': K0_S = N_310 (only if the "
-            "file already contains weak eigenstates). 'auto' picks one by "
-            "pre-scanning the first 2000 events. Replaces the older "
-            "--include-k0 flag (which is still accepted for compatibility)."
-        ),
-    )
-    parser.add_argument(
-        "--include-k0",
-        action="store_true",
-        help="DEPRECATED. Equivalent to --k0-mode strong.",
-    )
+    parser.add_argument("--k0-mode", choices=("auto", "strong", "weak"), default="auto")
+    parser.add_argument("--include-k0", action="store_true", help="DEPRECATED. Equivalent to --k0-mode strong.")
     parser.add_argument("--system", default="")
     parser.add_argument("--beam-label", default="")
+    parser.add_argument("--centrality-top-fraction", type=float, default=None, help="Keep only the top fraction of events ranked by charged-particle activity, e.g. 0.10 for top 10% most active events.")
+    parser.add_argument("--centrality-activity-ymax", type=float, default=None, help="Optional |y| acceptance used when defining event activity. If omitted, all charged particles are counted.")
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
-
     in_path = Path(args.input)
     if not in_path.is_file():
         print(f"Input file not found: {in_path}", file=sys.stderr)
         return 2
-
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-
     try:
         y_shift = resolve_y_shift(args)
     except ValueError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
-
     layout = args.layout if args.layout != "auto" else detect_layout(in_path)
-
-    # Resolve K0 counting mode. --include-k0 (legacy) -> strong.
     requested_k0_mode = args.k0_mode
     if args.include_k0 and args.k0_mode == "auto":
         requested_k0_mode = "strong"
-
     k0_mode, k0_info = _resolve_k0_mode(in_path, layout, requested_k0_mode)
-
+    selected_event_ids, centrality_info = select_events_by_activity(in_path, layout, args.centrality_top_fraction, args.centrality_activity_ymax)
     print(f"[analyze_urqmd_kaons] file={in_path} layout={layout} outdir={outdir}")
-    print(f"  collision_mode={args.collision_mode}")
-    print(f"  input_frame={args.input_frame}")
-    print(f"  analysis_frame=cm")
-    print(f"  y_analysis = y_input - ({y_shift:.6f})")
-    print(f"  k0_mode={k0_mode}  (requested={requested_k0_mode})")
+    print(f" collision_mode={args.collision_mode}")
+    print(f" input_frame={args.input_frame}")
+    print(f" analysis_frame=cm")
+    print(f" y_analysis = y_input - ({y_shift:.6f})")
+    print(f" k0_mode={k0_mode} (requested={requested_k0_mode})")
     if k0_info.get("scanned_events"):
-        print(f"  k0_prescan: events={k0_info['scanned_events']} "
-              f"N_310={k0_info['n_310']} N_311={k0_info['n_311']} "
-              f"N_-311={k0_info['n_m311']}")
-
-    res = analyze(
-        in_path,
-        layout=layout,
-        ycut=args.ycut,
-        y_shift=y_shift,
-        pt_bins=args.pt_bins,
-        pt_max=args.pt_max,
-        y_bins=args.y_bins,
-        y_min=args.y_min,
-        y_max=args.y_max,
-        k0_mode=k0_mode,
-    )
-
+        print(f" k0_prescan: events={k0_info['scanned_events']} N_310={k0_info['n_310']} N_311={k0_info['n_311']} N_-311={k0_info['n_m311']}")
+    if centrality_info.get("enabled"):
+        print(f" centrality_filter=top_activity_fraction {centrality_info['requested_fraction']:.6f}; selected={centrality_info['selected_events']}/{centrality_info['total_events_seen']}; threshold_activity={centrality_info['threshold_activity']}; activity_|y|<={centrality_info['activity_y_max']}")
+    res = analyze(in_path, layout=layout, ycut=args.ycut, y_shift=y_shift, pt_bins=args.pt_bins, pt_max=args.pt_max, y_bins=args.y_bins, y_min=args.y_min, y_max=args.y_max, k0_mode=k0_mode, selected_event_ids=selected_event_ids)
     res["collision_system"] = args.system
     res["beam_label"] = args.beam_label
     res["input_frame"] = args.input_frame
@@ -1093,34 +978,28 @@ def main(argv: Optional[List[str]] = None) -> int:
     res["analysis_frame"] = "cm"
     res["ecm_snn_gev"] = args.ecm_snn if args.ecm_snn is not None else ""
     res["beam_kinetic_agev"] = args.beam_kinetic_agev if args.beam_kinetic_agev is not None else ""
-
-    print(f"  events read: {res['n_events']}")
-    print(f"  particles seen: {res['n_particles_seen']}")
-
+    res["centrality_top_fraction"] = args.centrality_top_fraction if args.centrality_top_fraction is not None else ""
+    res["centrality_activity_ymax"] = args.centrality_activity_ymax if args.centrality_activity_ymax is not None else ""
+    res["centrality_selected_events"] = centrality_info.get("selected_events", "")
+    res["centrality_total_events_seen"] = centrality_info.get("total_events_seen", "")
+    res["centrality_threshold_activity"] = centrality_info.get("threshold_activity", "")
+    print(f" events accepted: {res['n_events']}")
+    print(f" events seen total: {res['n_events_seen_total']}")
+    print(f" particles seen: {res['n_particles_seen']}")
     neutral_scale = res.get("neutral_scale", 1.0)
     k0s_total = neutral_scale * res["total_yield"]["K0S"]
     k0s_window = neutral_scale * res["yield_in_window"]["K0S"]
-
-    print(f"  totals: K+={res['total_yield']['Kplus']} "
-          f"K-={res['total_yield']['Kminus']} K0S_equiv={k0s_total:g}")
-    print(f"  neutral raw counts used for K0S_equiv: "
-          f"{res['total_yield']['K0S']} (scale={neutral_scale:g}, codes={res['k0s_codes']})")
-    print(f"  in |y_analysis|<{args.ycut}: K+={res['yield_in_window']['Kplus']} "
-          f"K-={res['yield_in_window']['Kminus']} K0S_equiv={k0s_window:g}")
-
+    print(f" totals: K+={res['total_yield']['Kplus']} K-={res['total_yield']['Kminus']} K0S_equiv={k0s_total:g}")
+    print(f" neutral raw counts used for K0S_equiv: {res['total_yield']['K0S']} (scale={neutral_scale:g}, codes={res['k0s_codes']})")
+    print(f" in |y_analysis|<{args.ycut}: K+={res['yield_in_window']['Kplus']} K-={res['yield_in_window']['Kminus']} K0S_equiv={k0s_window:g}")
     normalize = not args.no_normalize
     save_pt_spectra(outdir, res, normalize=normalize)
     save_y_distributions(outdir, res, normalize=normalize)
     save_y_distributions_meancharged(outdir, res, normalize=normalize)
     save_ratio(outdir, res)
+    save_ratio_y(outdir, res)
     save_summary(outdir, res)
-
-    print(
-        "  wrote: pt_spectra.{csv,png}, y_distributions.{csv,png}, "
-        "y_distributions_meancharged.{csv,png}, ratio_pt.{csv,png}, "
-        f"mean_kaon_y.{{csv,png}}, summary.csv -> {outdir}"
-    )
-
+    print(" wrote: pt_spectra.{csv,png}, y_distributions.{csv,png}, y_distributions_meancharged.{csv,png}, ratio_pt.{csv,png}, ratio_y.{csv,png}, mean_kaon_y.{csv,png}, summary.csv")
     return 0
 
 
