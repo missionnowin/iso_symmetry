@@ -1,0 +1,12 @@
+#: table_doi: 10.17182/hepdata.156978.v2/t3
+#: name: Figure 2a
+#: description: Numerical data for $K^0_S$ from Figure 2.
+#: data_file: figure_2a.yaml
+#: keyword observables: dn/dp$_T$
+$p_T$ [GeV/c],dn/dp$_T$ [(GeV/c)$^{-1}$],total uncertainty +,total uncertainty -
+0.15,3.0679,0.17348,-0.17348
+0.45,4.236,0.39454,-0.39454
+0.75,2.1955,0.23242,-0.23242
+1.05,0.95172,0.19497,-0.19497
+1.35,0.30093,0.045827,-0.045827
+

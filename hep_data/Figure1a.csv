@@ -1,0 +1,14 @@
+#: table_doi: 10.17182/hepdata.156978.v2/t1
+#: name: Figure 1a
+#: description: Numerical data for $K^0_S$ from Figure 1.
+#: data_file: figure_1a.yaml
+#: keyword observables: dn/dy
+y,dn/dy,total uncertainty +,total uncertainty -
+-1.25,1.2968,0.49952,-0.49952
+-0.75,2.0618,0.14184,-0.14184
+-0.25,2.4247,0.12411,-0.12411
+0.25,2.3601,0.086373,-0.086373
+0.75,2.0325,0.17769,-0.17769
+1.25,1.3591,0.18926,-0.18926
+1.75,0.53723,0.23439,-0.23439
+
