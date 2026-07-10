@@ -16,12 +16,18 @@ Outputs per system (all as .eps + .png), e.g. for Ar+Sc:
   ArSc_11p9GeV_rap_overlay_mod.{eps,png}
   ArSc_11p9GeV_pt_overlay_unmod.{eps,png}     -- dN/dpT (linear) + R(pT)
   ArSc_11p9GeV_pt_overlay_mod.{eps,png}
-  ArSc_11p9GeV_pan_y_species_unmod.{eps,png}
+  ArSc_11p9GeV_pan_y_species_unmod.{eps,png}  -- dN/dy per species (UrQMD only)
   ArSc_11p9GeV_pan_y_species_mod.{eps,png}
-  ArSc_11p9GeV_pan_pt_species_unmod.{eps,png}
+  ArSc_11p9GeV_pan_pt_species_unmod.{eps,png} -- dN/dpT per species (UrQMD only)
   ArSc_11p9GeV_pan_pt_species_mod.{eps,png}
+  ArSc_11p9GeV_pan_dn_y_species_unmod.{eps,png}  -- dn/dy per species (per-event)
+  ArSc_11p9GeV_pan_dn_y_species_mod.{eps,png}
+  ArSc_11p9GeV_pan_dn_pt_species_unmod.{eps,png} -- dn/dpT per species (per-event)
+  ArSc_11p9GeV_pan_dn_pt_species_mod.{eps,png}
   ArSc_11p9GeV_pan_ratio_y_unmod.{eps,png}
   ArSc_11p9GeV_pan_ratio_y_mod.{eps,png}
+  ArSc_11p9GeV_fig7_k0s_2d_unmod.{eps,png}   -- Fig7-style K0S d2n/dydpT vs exp
+  ArSc_11p9GeV_fig7_k0s_2d_mod.{eps,png}
 
 NOTE: energy_str uses 'p' instead of '.' (e.g. 11p9GeV) to avoid
 Windows treating the decimal as a file extension separator.
@@ -45,6 +51,15 @@ the ratio of two Boltzmann fits (one per species) with the uncertainty
 band obtained by propagating the fit-parameter covariance matrices
 analytically.  This produces a smooth shaded band, NOT discrete error bars.
 UrQMD R(pT) uses raw bin-by-bin MC statistical errors (line only).
+
+Fig.7 panel note
+----------------
+The Fig7-style plot shows K0S d^2n/dydpT as a function of pT for each
+rapidity bin, overlaying:
+  - unmod UrQMD (solid line, no markers)
+  - mod  UrQMD  (dashed line, no markers)
+  - NA61/SHINE experimental data (filled circles with stat+sys errors)
+This uses hep_data/Figure7.csv which contains the 2D (y, pT) spectrum.
 """
 
 from __future__ import annotations
@@ -118,6 +133,12 @@ STYLE = {
                    mfc="white", mec="black", color="black"),
     "ratio_y": dict(ls="-", lw=1.4, marker="o", ms=4,
                     mfc="black", mec="black", color="black"),
+    # Fig7 styles
+    "fig7_urqmd_unmod": dict(ls="-",  lw=1.4, marker="None", color="black"),
+    "fig7_urqmd_mod":   dict(ls="--", lw=1.4, marker="None", color="black"),
+    "fig7_exp":         dict(ls="None", marker="o", ms=4,
+                             mfc="black", mec="black", color="black",
+                             capsize=2, elinewidth=0.8),
 }
 
 SPECIES_LABEL = {
@@ -142,6 +163,7 @@ class SystemDef:
     hep1b: str
     hep2a: str
     hep2b: str
+    hep7: str = ""    # Figure7 2D K0S spectrum (optional)
 
     def out(self, outdir: Path, kind: str, mod: bool) -> Path:
         """
@@ -161,6 +183,7 @@ ALL_SYSTEMS: List[SystemDef] = [
         mod_dir="ArSc-kaons-11.9GeV-ecm-collision-modified-ud/results",
         hep1a="Figure1a.csv", hep1b="Figure1b.csv",
         hep2a="Figure2a.csv", hep2b="Figure2b.csv",
+        hep7="Figure7.csv",
     ),
     SystemDef(
         tag="XeXe", label="Xe+Xe",
@@ -274,6 +297,12 @@ def load_urqmd_pt_spectra(path: Path) -> Dict[str, Tuple[np.ndarray, np.ndarray,
             for sp, v in data.items()}
 
 
+# load_urqmd_pt_spectra and load_urqmd_y_distributions work for both
+# dN and dn CSV files since the column layout is identical (col 5 = value).
+load_urqmd_dn_pt_spectra = load_urqmd_pt_spectra
+load_urqmd_dn_y_distributions = load_urqmd_y_distributions
+
+
 def load_urqmd_ratio_pt(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     rows = _skip_comments_lines(path)
     reader = csv.reader(rows)
@@ -300,6 +329,123 @@ def load_urqmd_ratio_y(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         Rk.append(float(row[6]) if row[6] else math.nan)
         Rk_e.append(float(row[7]) if row[7] else math.nan)
     return np.array(yc), np.array(Rk), np.array(Rk_e)
+
+
+def load_figure7(
+    path: Path,
+) -> Dict[Tuple[float, float], Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    """
+    Load Figure7.csv (HEPdata d^2n/dy dpT 2D K0S spectrum).
+
+    Returns a dict keyed by (y_lo, y_hi) tuples, each containing
+    (pt_centers, values, err_up, err_dn) arrays.
+    The total uncertainty is taken as quadrature sum of stat + sys.
+
+    CSV columns (after skipping # comments):
+      y, y_LOW, y_HIGH, pT, pT_LOW, pT_HIGH, d2n/dydpT, stat+, stat-, sys+, sys-
+    """
+    rows = _skip_comments_lines(path)
+    reader = csv.reader(rows)
+    next(reader, None)  # skip header
+
+    data: Dict[Tuple[float, float], Tuple[List, List, List, List]] = {}
+    for row in reader:
+        if len(row) < 11:
+            continue
+        try:
+            y_lo  = float(row[1])
+            y_hi  = float(row[2])
+            pt    = float(row[3])
+            val   = float(row[6])
+            sp    = abs(float(row[7]))   # stat+
+            sm    = abs(float(row[8]))   # stat-
+            sysp  = abs(float(row[9]))   # sys+
+            sysm  = abs(float(row[10]))  # sys-
+        except (ValueError, IndexError):
+            continue
+        # total uncertainty = quadrature sum
+        e_up = math.hypot(sp, sysp)
+        e_dn = math.hypot(sm, sysm)
+        key = (y_lo, y_hi)
+        if key not in data:
+            data[key] = ([], [], [], [])
+        data[key][0].append(pt)
+        data[key][1].append(val)
+        data[key][2].append(e_up)
+        data[key][3].append(e_dn)
+
+    return {
+        k: (np.array(v[0]), np.array(v[1]), np.array(v[2]), np.array(v[3]))
+        for k, v in data.items()
+    }
+
+
+def _load_urqmd_k0s_pt_in_ybin(
+    urqmd_dir: Path,
+    y_lo: float,
+    y_hi: float,
+    use_dn: bool = True,
+) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """
+    Build a per-event d^2n/dy dpT estimate for K0S from the per-event
+    dn/dpT CSV produced by analyze_urqmd_kaons.
+
+    The analyzer accumulates pT spectra for all particles with
+    |y_analysis| < ycut (integrated over y).  To compare with a Fig7
+    rapidity slice [y_lo, y_hi], we scale by the fraction of the total
+    y-distribution that falls in that bin, estimated from y_distributions_dn.csv.
+    We then divide by the rapidity bin width (y_hi - y_lo) to get d^2n/dydpT.
+
+    Returns (pt_centers, d2n_dydpt, d2n_dydpt_err) or None if files missing.
+    """
+    pt_file = urqmd_dir / ("pt_spectra_dn.csv" if use_dn else "pt_spectra.csv")
+    y_file  = urqmd_dir / ("y_distributions_dn.csv" if use_dn else "y_distributions.csv")
+
+    if not pt_file.exists() or not y_file.exists():
+        return None
+
+    pt_data = load_urqmd_pt_spectra(pt_file)
+    y_data  = load_urqmd_y_distributions(y_file)
+
+    if "K0S" not in pt_data or "K0S" not in y_data:
+        return None
+
+    pt_centers, dn_dpt, dn_dpt_err = pt_data["K0S"]
+    y_centers, dn_dy, dn_dy_err   = y_data["K0S"]
+
+    if len(y_centers) == 0 or len(pt_centers) == 0:
+        return None
+
+    # Fraction of the rapidity distribution in the slice [y_lo, y_hi]
+    dy = y_centers[1] - y_centers[0] if len(y_centers) > 1 else 1.0
+    mask = (y_centers >= y_lo - 1e-6) & (y_centers < y_hi + 1e-6)
+    if not mask.any():
+        return None
+
+    # Integrate dn/dy over the slice -> dn in that y-slice
+    dn_in_slice     = np.sum(dn_dy[mask] * dy)
+    dn_in_slice_err = math.sqrt(np.sum((dn_dy_err[mask] * dy) ** 2))
+
+    # Total dn (integral over all y)
+    dn_total     = np.sum(dn_dy * dy)
+    if dn_total <= 0:
+        return None
+
+    # Fraction in slice
+    frac     = dn_in_slice / dn_total
+    frac_err = dn_in_slice_err / dn_total  # ignoring denominator uncertainty
+
+    # d^2n/dy dpT = (dn/dpT * frac) / (y_hi - y_lo)
+    dy_bin = y_hi - y_lo
+    d2n = dn_dpt * frac / dy_bin
+    # error propagation (treat frac_err as correlated over pT)
+    d2n_err = np.sqrt(
+        (dn_dpt_err * frac / dy_bin) ** 2
+        + (dn_dpt    * frac_err / dy_bin) ** 2
+    )
+
+    return pt_centers, d2n, d2n_err
+
 
 # ---------------------------------------------------------------------------
 # Save helper
@@ -613,7 +759,7 @@ def make_pt_overlay(
     print(f"  wrote {outpath.with_suffix('.eps')}")
 
 # ---------------------------------------------------------------------------
-# PAN-style UrQMD-only plots
+# PAN-style UrQMD-only plots  --  dN/dy  and  dN/dpT
 # ---------------------------------------------------------------------------
 
 def make_pan_y_species(urqmd_dir: Path, outpath: Path) -> None:
@@ -658,6 +804,64 @@ def make_pan_pt_species(urqmd_dir: Path, outpath: Path) -> None:
     plt.close(fig)
     print(f"  wrote {outpath.with_suffix('.eps')}")
 
+# ---------------------------------------------------------------------------
+# PAN-style UrQMD-only plots  --  dn/dy  and  dn/dpT  (per-event)
+# ---------------------------------------------------------------------------
+
+def make_pan_dn_y_species(urqmd_dir: Path, outpath: Path) -> None:
+    """PAN-style dn/dy (per-event) for K+, K-, K0S. No title."""
+    csv_path = urqmd_dir / "y_distributions_dn.csv"
+    if not csv_path.exists():
+        print(f"  [warn] {csv_path} not found -- skipping dn/dy plot")
+        return
+    data = load_urqmd_dn_y_distributions(csv_path)
+    fig, ax = plt.subplots(figsize=(6.5, 5.0))
+    for sp in ("Kplus", "Kminus", "K0S"):
+        if sp not in data:
+            continue
+        yc, val, err = data[sp]
+        ax.errorbar(yc, val, yerr=err,
+                    label=SPECIES_LABEL.get(sp, sp), **STYLE.get(sp, {}))
+    ax.set_xlabel(r"$y$")
+    ax.set_ylabel(r"$dn/dy$")
+    ax.xaxis.set_minor_locator(AutoMinorLocator())
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    _save(fig, outpath)
+    plt.close(fig)
+    print(f"  wrote {outpath.with_suffix('.eps')}")
+
+
+def make_pan_dn_pt_species(urqmd_dir: Path, outpath: Path) -> None:
+    """PAN-style dn/dpT (log, per-event) for K+, K-, K0S. No title."""
+    csv_path = urqmd_dir / "pt_spectra_dn.csv"
+    if not csv_path.exists():
+        print(f"  [warn] {csv_path} not found -- skipping dn/dpT plot")
+        return
+    data = load_urqmd_dn_pt_spectra(csv_path)
+    fig, ax = plt.subplots(figsize=(6.5, 5.0))
+    for sp in ("Kplus", "Kminus", "K0S"):
+        if sp not in data:
+            continue
+        pt, val, err = data[sp]
+        ax.errorbar(pt, val, yerr=err,
+                    label=SPECIES_LABEL.get(sp, sp), **STYLE.get(sp, {}))
+    ax.set_yscale("log")
+    ax.set_xlabel(r"$p_T\;[\mathrm{GeV}/c]$")
+    ax.set_ylabel(r"$dn/dp_T\;[(\mathrm{GeV}/c)^{-1}]$")
+    ax.xaxis.set_minor_locator(AutoMinorLocator())
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.legend(loc="upper right")
+    fig.tight_layout()
+    _save(fig, outpath)
+    plt.close(fig)
+    print(f"  wrote {outpath.with_suffix('.eps')}")
+
+
+# ---------------------------------------------------------------------------
+# PAN-style R_K(y) -- isospin ratio
+# ---------------------------------------------------------------------------
 
 def make_pan_ratio_y(urqmd_dir: Path, outpath: Path) -> None:
     """PAN-style R_K(y) = 0.5*(K++K-)/K0S vs y. No title. No error bars."""
@@ -678,6 +882,126 @@ def make_pan_ratio_y(urqmd_dir: Path, outpath: Path) -> None:
     _save(fig, outpath)
     plt.close(fig)
     print(f"  wrote {outpath.with_suffix('.eps')}")
+
+
+# ---------------------------------------------------------------------------
+# Fig7-style: K0S d^2n/dy dpT vs pT in rapidity slices
+# Overlay: unmod UrQMD + mod UrQMD + NA61/SHINE exp data
+# ---------------------------------------------------------------------------
+
+def make_fig7_k0s_2d(
+    unmod_dir: Path,
+    mod_dir: Path,
+    hep7_path: Path,
+    outpath: Path,
+) -> None:
+    """
+    Fig7-style multi-panel plot: K0S d^2n/dy dpT vs pT, one panel per
+    rapidity bin from Figure7.csv.
+
+    Each panel shows:
+      - NA61/SHINE exp data points with total (stat ⊕ sys) uncertainties
+      - UrQMD unmod (solid line)
+      - UrQMD mod   (dashed line)
+
+    The rapidity bin label is shown inside each panel.
+    The figure matches the layout of Fig.7 in the NA61/SHINE paper
+    (Methods Extended data section).
+    """
+    if not hep7_path.exists():
+        print(f"  [warn] {hep7_path} not found -- skipping Fig7 plot")
+        return
+
+    exp_data = load_figure7(hep7_path)
+    if not exp_data:
+        print(f"  [warn] No data loaded from {hep7_path} -- skipping Fig7 plot")
+        return
+
+    # Sort rapidity bins by their lower edge
+    y_bins = sorted(exp_data.keys(), key=lambda k: k[0])
+    n_bins = len(y_bins)
+
+    # Determine subplot grid: fill row-by-row
+    n_cols = min(3, n_bins)
+    n_rows = math.ceil(n_bins / n_cols)
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(n_cols * 4.0, n_rows * 3.5),
+        squeeze=False,
+    )
+
+    for idx, (y_lo, y_hi) in enumerate(y_bins):
+        row = idx // n_cols
+        col = idx % n_cols
+        ax = axes[row][col]
+
+        pt_exp, val_exp, ep_exp, em_exp = exp_data[(y_lo, y_hi)]
+        total_err_up = ep_exp
+        total_err_dn = em_exp
+
+        # Experimental data
+        ax.errorbar(
+            pt_exp, val_exp,
+            yerr=[total_err_dn, total_err_up],
+            label=r"NA61/SHINE",
+            **STYLE["fig7_exp"],
+        )
+
+        # UrQMD unmod
+        res_unmod = _load_urqmd_k0s_pt_in_ybin(unmod_dir, y_lo, y_hi, use_dn=True)
+        if res_unmod is not None:
+            pt_u, d2n_u, _ = res_unmod
+            finite_u = np.isfinite(d2n_u) & (d2n_u > 0)
+            if finite_u.any():
+                ax.plot(
+                    pt_u[finite_u], d2n_u[finite_u],
+                    label=r"UrQMD",
+                    **STYLE["fig7_urqmd_unmod"],
+                )
+
+        # UrQMD mod
+        res_mod = _load_urqmd_k0s_pt_in_ybin(mod_dir, y_lo, y_hi, use_dn=True)
+        if res_mod is not None:
+            pt_m, d2n_m, _ = res_mod
+            finite_m = np.isfinite(d2n_m) & (d2n_m > 0)
+            if finite_m.any():
+                ax.plot(
+                    pt_m[finite_m], d2n_m[finite_m],
+                    label=r"UrQMD(3:1)",
+                    **STYLE["fig7_urqmd_mod"],
+                )
+
+        # y-bin label inside panel
+        y_label = rf"${y_lo:.1f} < y < {y_hi:.1f}$"
+        ax.text(0.97, 0.95, y_label, transform=ax.transAxes,
+                ha="right", va="top", fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
+
+        ax.set_yscale("log")
+        ax.xaxis.set_minor_locator(AutoMinorLocator())
+        ax.yaxis.set_minor_locator(AutoMinorLocator())
+
+        # Only show x-label on bottom row, y-label on left column
+        if row == n_rows - 1:
+            ax.set_xlabel(r"$p_T\;[\mathrm{GeV}/c]$")
+        if col == 0:
+            ax.set_ylabel(r"$d^2n/dy\,dp_T\;[(\mathrm{GeV}/c)^{-1}]$")
+
+        if idx == 0:
+            ax.legend(loc="upper right", fontsize=8)
+
+    # Hide unused axes
+    for idx in range(n_bins, n_rows * n_cols):
+        row = idx // n_cols
+        col = idx % n_cols
+        axes[row][col].set_visible(False)
+
+    fig.tight_layout()
+    _save(fig, outpath)
+    plt.close(fig)
+    print(f"  wrote {outpath.with_suffix('.eps')}")
+
 
 # ---------------------------------------------------------------------------
 # Per-system driver
@@ -705,6 +1029,8 @@ def process_system(
     hep2b = hep_dir / sys_def.hep2b
     hep_ok = all(p.exists() for p in (hep1a, hep1b, hep2a, hep2b))
 
+    hep7 = hep_dir / sys_def.hep7 if sys_def.hep7 else None
+
     if not hep_ok:
         for p in (hep1a, hep1b, hep2a, hep2b):
             if not p.exists():
@@ -727,13 +1053,30 @@ def process_system(
         make_pt_overlay(mod_dir,   hep2a, hep2b,
                         sys_def.out(outdir, "pt_overlay", mod=True),  modified=True)
 
-    print("  PAN-style UrQMD-only figures...")
+    print("  PAN-style UrQMD-only figures (dN)...")
     make_pan_y_species(unmod_dir,  sys_def.out(outdir, "pan_y_species",  mod=False))
     make_pan_y_species(mod_dir,    sys_def.out(outdir, "pan_y_species",  mod=True))
     make_pan_pt_species(unmod_dir, sys_def.out(outdir, "pan_pt_species", mod=False))
     make_pan_pt_species(mod_dir,   sys_def.out(outdir, "pan_pt_species", mod=True))
+
+    print("  PAN-style UrQMD-only figures (dn per-event)...")
+    make_pan_dn_y_species(unmod_dir,  sys_def.out(outdir, "pan_dn_y_species",  mod=False))
+    make_pan_dn_y_species(mod_dir,    sys_def.out(outdir, "pan_dn_y_species",  mod=True))
+    make_pan_dn_pt_species(unmod_dir, sys_def.out(outdir, "pan_dn_pt_species", mod=False))
+    make_pan_dn_pt_species(mod_dir,   sys_def.out(outdir, "pan_dn_pt_species", mod=True))
+
+    print("  PAN-style ratio R_K(y)...")
     make_pan_ratio_y(unmod_dir,    sys_def.out(outdir, "pan_ratio_y",    mod=False))
     make_pan_ratio_y(mod_dir,      sys_def.out(outdir, "pan_ratio_y",    mod=True))
+
+    if hep7 is not None and hep7.exists():
+        print("  Fig7-style K0S d^2n/dydpT (unmod+mod UrQMD vs NA61/SHINE)...")
+        make_fig7_k0s_2d(
+            unmod_dir, mod_dir, hep7,
+            sys_def.out(outdir, "fig7_k0s_2d", mod=False),
+        )
+    elif hep7 is not None:
+        print(f"  [warn] Fig7 HepData file not found: {hep7} -- skipping Fig7 plot")
 
 # ---------------------------------------------------------------------------
 # CLI
