@@ -12,22 +12,23 @@ NA61/SHINE HepData CSVs for multiple collision systems:
   - Xe+W   @ sqrt(s_NN) =  2.9 GeV  (target frame)
 
 Outputs per system (all as .eps + .png), e.g. for Ar+Sc:
-  ArSc_11p9GeV_rap_overlay_unmod.{eps,png}    -- dN/dy UrQMD vs NA61/SHINE
+  ArSc_11p9GeV_rap_overlay_unmod.{eps,png}        -- dN/dy UrQMD vs NA61/SHINE
   ArSc_11p9GeV_rap_overlay_mod.{eps,png}
-  ArSc_11p9GeV_pt_overlay_unmod.{eps,png}     -- dN/dpT (linear) + R(pT)
+  ArSc_11p9GeV_pt_overlay_unmod.{eps,png}         -- dN/dpT (linear) + R(pT)
   ArSc_11p9GeV_pt_overlay_mod.{eps,png}
-  ArSc_11p9GeV_pan_y_species_unmod.{eps,png}  -- dN/dy per species (UrQMD only)
+  ArSc_11p9GeV_pan_y_species_unmod.{eps,png}      -- dN/dy per species (UrQMD only)
   ArSc_11p9GeV_pan_y_species_mod.{eps,png}
-  ArSc_11p9GeV_pan_pt_species_unmod.{eps,png} -- dN/dpT per species (UrQMD only)
+  ArSc_11p9GeV_pan_pt_species_unmod.{eps,png}     -- dN/dpT per species (UrQMD only)
   ArSc_11p9GeV_pan_pt_species_mod.{eps,png}
-  ArSc_11p9GeV_pan_dn_y_species_unmod.{eps,png}  -- dn/dy per species (per-event)
+  ArSc_11p9GeV_pan_dn_y_species_unmod.{eps,png}   -- dn/dy per species (per-event)
   ArSc_11p9GeV_pan_dn_y_species_mod.{eps,png}
-  ArSc_11p9GeV_pan_dn_pt_species_unmod.{eps,png} -- dn/dpT per species (per-event)
+  ArSc_11p9GeV_pan_dn_pt_species_unmod.{eps,png}  -- dn/dpT per species (per-event)
   ArSc_11p9GeV_pan_dn_pt_species_mod.{eps,png}
   ArSc_11p9GeV_pan_ratio_y_unmod.{eps,png}
   ArSc_11p9GeV_pan_ratio_y_mod.{eps,png}
-  ArSc_11p9GeV_fig7_k0s_2d_unmod.{eps,png}   -- Fig7-style K0S d2n/dydpT vs exp
-  ArSc_11p9GeV_fig7_k0s_2d_mod.{eps,png}
+  ArSc_11p9GeV_dn_rap_overlay.{eps,png}           -- dn/dy unmod vs mod overlay (K0S + Kch)
+  ArSc_11p9GeV_dn_pt_overlay.{eps,png}            -- dn/dpT unmod vs mod overlay (K0S + Kch)
+  ArSc_11p9GeV_k0s_2d_combined_overlay.{eps,png}  -- K0S d2n/dydpT vs exp
 
 NOTE: energy_str uses 'p' instead of '.' (e.g. 11p9GeV) to avoid
 Windows treating the decimal as a file extension separator.
@@ -35,8 +36,8 @@ Windows treating the decimal as a file extension separator.
 PAN journal style notes
 -----------------------
 * No in-plot titles -- system/energy/variant info goes in the LaTeX caption.
-* UrQMD vs UrQMD(3:1) labels appear only in overlay figs (rap_overlay/pt_overlay)
-  where UrQMD curves are directly compared against NA61/SHINE data.
+* UrQMD vs UrQMD(3:1) labels appear only in overlay figs (rap_overlay/pt_overlay
+  and dn_rap_overlay/dn_pt_overlay) where UrQMD curves are directly compared.
 * PAN-only UrQMD plots show only species labels (K+, K-, K0S).
 * Grayscale / black-and-white only.
 * Curves distinguished by linestyle + marker shape.
@@ -52,10 +53,10 @@ band obtained by propagating the fit-parameter covariance matrices
 analytically.  This produces a smooth shaded band, NOT discrete error bars.
 UrQMD R(pT) uses raw bin-by-bin MC statistical errors (line only).
 
-Fig.7 panel note
-----------------
-The Fig7-style plot shows K0S d^2n/dydpT as a function of pT for each
-rapidity bin, overlaying:
+k0s_2d_combined_overlay panel note
+-----------------------------------
+The k0s_2d_combined_overlay plot shows K0S d^2n/dydpT as a function of pT
+for each rapidity bin, overlaying:
   - unmod UrQMD (solid line, no markers)
   - mod  UrQMD  (dashed line, no markers)
   - NA61/SHINE experimental data (filled circles with stat+sys errors)
@@ -133,12 +134,17 @@ STYLE = {
                    mfc="white", mec="black", color="black"),
     "ratio_y": dict(ls="-", lw=1.4, marker="o", ms=4,
                     mfc="black", mec="black", color="black"),
-    # Fig7 styles
+    # k0s_2d_combined_overlay styles
     "fig7_urqmd_unmod": dict(ls="-",  lw=1.4, marker="None", color="black"),
     "fig7_urqmd_mod":   dict(ls="--", lw=1.4, marker="None", color="black"),
     "fig7_exp":         dict(ls="None", marker="o", ms=4,
                              mfc="black", mec="black", color="black",
                              capsize=2, elinewidth=0.8),
+    # dn overlay styles: unmod solid, mod dashed; K0S vs Kch by marker
+    "dn_unmod_k0s": dict(ls="-",  lw=1.4, marker="None", color="black"),
+    "dn_unmod_kch": dict(ls="-",  lw=1.4, marker="None", color="black"),
+    "dn_mod_k0s":   dict(ls="--", lw=1.4, marker="None", color="black"),
+    "dn_mod_kch":   dict(ls="--", lw=1.4, marker="None", color="black"),
 }
 
 SPECIES_LABEL = {
@@ -165,11 +171,20 @@ class SystemDef:
     hep2b: str
     hep7: str = ""    # Figure7 2D K0S spectrum (optional)
 
-    def out(self, outdir: Path, kind: str, mod: bool) -> Path:
+    def out(self, outdir: Path, kind: str, mod: Optional[bool] = None) -> Path:
         """
-        Build output path: {outdir}/{tag}_{energy_str}_{kind}_{mod|unmod}
-        e.g. pan_figures/ArSc_11p9GeV_rap_overlay_mod
+        Build output path.
+
+        For plots that separate unmod/mod variants (mod is True or False):
+            {outdir}/{tag}_{energy_str}_{kind}_{mod|unmod}
+            e.g. pan_figures/ArSc_11p9GeV_rap_overlay_mod
+
+        For combined overlay plots (mod is None):
+            {outdir}/{tag}_{energy_str}_{kind}
+            e.g. pan_figures/ArSc_11p9GeV_k0s_2d_combined_overlay
         """
+        if mod is None:
+            return outdir / f"{self.tag}_{self.energy_str}_{kind}"
         suffix = "mod" if mod else "unmod"
         return outdir / f"{self.tag}_{self.energy_str}_{kind}_{suffix}"
 
@@ -885,18 +900,162 @@ def make_pan_ratio_y(urqmd_dir: Path, outpath: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fig7-style: K0S d^2n/dy dpT vs pT in rapidity slices
-# Overlay: unmod UrQMD + mod UrQMD + NA61/SHINE exp data
+# dn/dy overlay -- unmod vs mod (K0S and (K++K-)/2), combined plot
 # ---------------------------------------------------------------------------
 
-def make_fig7_k0s_2d(
+def make_dn_rap_overlay(
+    unmod_dir: Path,
+    mod_dir: Path,
+    outpath: Path,
+) -> None:
+    """
+    Single panel: dn/dy per-event for K0S and (K++K-)/2,
+    overlaying unmod (solid) vs mod (dashed) UrQMD.
+    No NA61/SHINE data -- this is a purely UrQMD comparison plot.
+    """
+    csv_unmod = unmod_dir / "y_distributions_dn.csv"
+    csv_mod   = mod_dir   / "y_distributions_dn.csv"
+    if not csv_unmod.exists():
+        print(f"  [warn] {csv_unmod} not found -- skipping dn/dy overlay")
+        return
+    if not csv_mod.exists():
+        print(f"  [warn] {csv_mod} not found -- skipping dn/dy overlay")
+        return
+
+    data_u = load_urqmd_dn_y_distributions(csv_unmod)
+    data_m = load_urqmd_dn_y_distributions(csv_mod)
+
+    fig, ax = plt.subplots(figsize=(6.5, 5.0))
+
+    # K0S curves
+    if "K0S" in data_u:
+        yc, val, err = data_u["K0S"]
+        ax.errorbar(yc, val, yerr=err,
+                    label=r"UrQMD $K^0_S$",
+                    ls="-", lw=1.4, marker="^", ms=4,
+                    mfc="white", mec="black", color="black",
+                    capsize=2, elinewidth=0.7)
+    if "K0S" in data_m:
+        yc, val, err = data_m["K0S"]
+        ax.errorbar(yc, val, yerr=err,
+                    label=r"UrQMD(3:1) $K^0_S$",
+                    ls="--", lw=1.4, marker="^", ms=4,
+                    mfc="black", mec="black", color="black",
+                    capsize=2, elinewidth=0.7)
+
+    # (K+ + K-)/2 curves -- compute on the fly from K+ and K-
+    for data, ls, mfc, prefix in (
+        (data_u, "-",  "white", "UrQMD"),
+        (data_m, "--", "black", "UrQMD(3:1)"),
+    ):
+        if "Kplus" in data and "Kminus" in data:
+            yc_p, vp, ep = data["Kplus"]
+            yc_m, vm, em = data["Kminus"]
+            if len(yc_p) == len(yc_m):
+                kch_val = 0.5 * (vp + vm)
+                kch_err = 0.5 * np.sqrt(ep**2 + em**2)
+                ax.errorbar(yc_p, kch_val, yerr=kch_err,
+                            label=rf"{prefix} $(K^+ {{+}} K^-)/2$",
+                            ls=ls, lw=1.4, marker="o", ms=4,
+                            mfc=mfc, mec="black", color="black",
+                            capsize=2, elinewidth=0.7)
+
+    ax.set_xlabel(r"$y$")
+    ax.set_ylabel(r"$dn/dy$")
+    ax.xaxis.set_minor_locator(AutoMinorLocator())
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    _save(fig, outpath)
+    plt.close(fig)
+    print(f"  wrote {outpath.with_suffix('.eps')}")
+
+
+# ---------------------------------------------------------------------------
+# dn/dpT overlay -- unmod vs mod (K0S and (K++K-)/2), combined plot
+# ---------------------------------------------------------------------------
+
+def make_dn_pt_overlay(
+    unmod_dir: Path,
+    mod_dir: Path,
+    outpath: Path,
+) -> None:
+    """
+    Single panel: dn/dpT per-event (log scale) for K0S and (K++K-)/2,
+    overlaying unmod (solid) vs mod (dashed) UrQMD.
+    No NA61/SHINE data -- this is a purely UrQMD comparison plot.
+    """
+    csv_unmod = unmod_dir / "pt_spectra_dn.csv"
+    csv_mod   = mod_dir   / "pt_spectra_dn.csv"
+    if not csv_unmod.exists():
+        print(f"  [warn] {csv_unmod} not found -- skipping dn/dpT overlay")
+        return
+    if not csv_mod.exists():
+        print(f"  [warn] {csv_mod} not found -- skipping dn/dpT overlay")
+        return
+
+    data_u = load_urqmd_dn_pt_spectra(csv_unmod)
+    data_m = load_urqmd_dn_pt_spectra(csv_mod)
+
+    fig, ax = plt.subplots(figsize=(6.5, 5.0))
+
+    # K0S curves
+    if "K0S" in data_u:
+        pt, val, err = data_u["K0S"]
+        ax.errorbar(pt, val, yerr=err,
+                    label=r"UrQMD $K^0_S$",
+                    ls="-", lw=1.4, marker="^", ms=4,
+                    mfc="white", mec="black", color="black",
+                    capsize=2, elinewidth=0.7)
+    if "K0S" in data_m:
+        pt, val, err = data_m["K0S"]
+        ax.errorbar(pt, val, yerr=err,
+                    label=r"UrQMD(3:1) $K^0_S$",
+                    ls="--", lw=1.4, marker="^", ms=4,
+                    mfc="black", mec="black", color="black",
+                    capsize=2, elinewidth=0.7)
+
+    # (K+ + K-)/2 curves
+    for data, ls, mfc, prefix in (
+        (data_u, "-",  "white", "UrQMD"),
+        (data_m, "--", "black", "UrQMD(3:1)"),
+    ):
+        if "Kplus" in data and "Kminus" in data:
+            pt_p, vp, ep = data["Kplus"]
+            pt_m, vm, em = data["Kminus"]
+            if len(pt_p) == len(pt_m):
+                kch_val = 0.5 * (vp + vm)
+                kch_err = 0.5 * np.sqrt(ep**2 + em**2)
+                ax.errorbar(pt_p, kch_val, yerr=kch_err,
+                            label=rf"{prefix} $(K^+ {{+}} K^-)/2$",
+                            ls=ls, lw=1.4, marker="o", ms=4,
+                            mfc=mfc, mec="black", color="black",
+                            capsize=2, elinewidth=0.7)
+
+    ax.set_yscale("log")
+    ax.set_xlabel(r"$p_T\;[\mathrm{GeV}/c]$")
+    ax.set_ylabel(r"$dn/dp_T\;[(\mathrm{GeV}/c)^{-1}]$")
+    ax.xaxis.set_minor_locator(AutoMinorLocator())
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    _save(fig, outpath)
+    plt.close(fig)
+    print(f"  wrote {outpath.with_suffix('.eps')}")
+
+
+# ---------------------------------------------------------------------------
+# K0S d^2n/dydpT vs pT in rapidity slices -- unmod + mod + NA61/SHINE overlay
+# ---------------------------------------------------------------------------
+
+def make_k0s_2d_combined_overlay(
     unmod_dir: Path,
     mod_dir: Path,
     hep7_path: Path,
     outpath: Path,
 ) -> None:
     """
-    Fig7-style multi-panel plot: K0S d^2n/dy dpT vs pT, one panel per
+    Multi-panel plot: K0S d^2n/dy dpT vs pT, one panel per
     rapidity bin from Figure7.csv.
 
     Each panel shows:
@@ -905,16 +1064,14 @@ def make_fig7_k0s_2d(
       - UrQMD mod   (dashed line)
 
     The rapidity bin label is shown inside each panel.
-    The figure matches the layout of Fig.7 in the NA61/SHINE paper
-    (Methods Extended data section).
     """
     if not hep7_path.exists():
-        print(f"  [warn] {hep7_path} not found -- skipping Fig7 plot")
+        print(f"  [warn] {hep7_path} not found -- skipping k0s_2d_combined_overlay plot")
         return
 
     exp_data = load_figure7(hep7_path)
     if not exp_data:
-        print(f"  [warn] No data loaded from {hep7_path} -- skipping Fig7 plot")
+        print(f"  [warn] No data loaded from {hep7_path} -- skipping k0s_2d_combined_overlay plot")
         return
 
     # Sort rapidity bins by their lower edge
@@ -952,7 +1109,7 @@ def make_fig7_k0s_2d(
         res_unmod = _load_urqmd_k0s_pt_in_ybin(unmod_dir, y_lo, y_hi, use_dn=True)
         if res_unmod is not None:
             pt_u, d2n_u, _ = res_unmod
-            finite_u = np.isfinite(d2n_u) & (d2n_u > 0)
+            finite_u = np.isfinite(d2n_u)
             if finite_u.any():
                 ax.plot(
                     pt_u[finite_u], d2n_u[finite_u],
@@ -964,7 +1121,7 @@ def make_fig7_k0s_2d(
         res_mod = _load_urqmd_k0s_pt_in_ybin(mod_dir, y_lo, y_hi, use_dn=True)
         if res_mod is not None:
             pt_m, d2n_m, _ = res_mod
-            finite_m = np.isfinite(d2n_m) & (d2n_m > 0)
+            finite_m = np.isfinite(d2n_m)
             if finite_m.any():
                 ax.plot(
                     pt_m[finite_m], d2n_m[finite_m],
@@ -1069,14 +1226,26 @@ def process_system(
     make_pan_ratio_y(unmod_dir,    sys_def.out(outdir, "pan_ratio_y",    mod=False))
     make_pan_ratio_y(mod_dir,      sys_def.out(outdir, "pan_ratio_y",    mod=True))
 
+    print("  dn/dy overlay (unmod vs mod UrQMD)...")
+    make_dn_rap_overlay(
+        unmod_dir, mod_dir,
+        sys_def.out(outdir, "dn_rap_overlay"),
+    )
+
+    print("  dn/dpT overlay (unmod vs mod UrQMD)...")
+    make_dn_pt_overlay(
+        unmod_dir, mod_dir,
+        sys_def.out(outdir, "dn_pt_overlay"),
+    )
+
     if hep7 is not None and hep7.exists():
-        print("  Fig7-style K0S d^2n/dydpT (unmod+mod UrQMD vs NA61/SHINE)...")
-        make_fig7_k0s_2d(
+        print("  K0S d^2n/dydpT combined overlay (unmod+mod UrQMD vs NA61/SHINE)...")
+        make_k0s_2d_combined_overlay(
             unmod_dir, mod_dir, hep7,
-            sys_def.out(outdir, "fig7_k0s_2d", mod=False),
+            sys_def.out(outdir, "k0s_2d_combined_overlay"),
         )
     elif hep7 is not None:
-        print(f"  [warn] Fig7 HepData file not found: {hep7} -- skipping Fig7 plot")
+        print(f"  [warn] Fig7 HepData file not found: {hep7} -- skipping k0s_2d_combined_overlay")
 
 # ---------------------------------------------------------------------------
 # CLI
