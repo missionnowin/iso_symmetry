@@ -26,8 +26,8 @@ Outputs per system (all as .eps + .png), e.g. for Ar+Sc:
   ArSc_11p9GeV_pan_dn_pt_species_mod.{eps,png}
   ArSc_11p9GeV_pan_ratio_y_unmod.{eps,png}
   ArSc_11p9GeV_pan_ratio_y_mod.{eps,png}
-  ArSc_11p9GeV_dn_rap_overlay.{eps,png}           -- dn/dy unmod vs mod overlay (K0S + Kch)
-  ArSc_11p9GeV_dn_pt_overlay.{eps,png}            -- dn/dpT unmod vs mod overlay (K0S + Kch)
+  ArSc_11p9GeV_dn_rap_overlay_fig1.{eps,png}      -- dn/dy unmod+mod vs NA61/SHINE Figure1
+  ArSc_11p9GeV_dn_pt_overlay_fig2.{eps,png}       -- dn/dpT (linear)+R(pT) unmod+mod vs Figure2
   ArSc_11p9GeV_k0s_2d_combined_overlay.{eps,png}  -- K0S d2n/dydpT vs exp
 
 NOTE: energy_str uses 'p' instead of '.' (e.g. 11p9GeV) to avoid
@@ -37,7 +37,7 @@ PAN journal style notes
 -----------------------
 * No in-plot titles -- system/energy/variant info goes in the LaTeX caption.
 * UrQMD vs UrQMD(3:1) labels appear only in overlay figs (rap_overlay/pt_overlay
-  and dn_rap_overlay/dn_pt_overlay) where UrQMD curves are directly compared.
+  and dn_rap_overlay_fig1/dn_pt_overlay_fig2) where UrQMD curves are directly compared.
 * PAN-only UrQMD plots show only species labels (K+, K-, K0S).
 * Grayscale / black-and-white only.
 * Curves distinguished by linestyle + marker shape.
@@ -751,7 +751,6 @@ def make_pt_overlay(
                 alpha=0.35, color="black",
                 label=r"NA61/SHINE",
             )
-            # (no center line -- it was the spurious second black curve)
     else:
         finite_e = np.isfinite(R_exp_fb)
         if finite_e.any():
@@ -900,34 +899,51 @@ def make_pan_ratio_y(urqmd_dir: Path, outpath: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# dn/dy overlay -- unmod vs mod (K0S and (K++K-)/2), combined plot
+# dn/dy overlay vs NA61/SHINE Figure1  (replaces old dn_rap_overlay)
 # ---------------------------------------------------------------------------
 
-def make_dn_rap_overlay(
+def make_dn_rap_overlay_fig1(
     unmod_dir: Path,
     mod_dir: Path,
+    hep1a: Path,
+    hep1b: Path,
     outpath: Path,
 ) -> None:
     """
-    Single panel: dn/dy per-event for K0S and (K++K-)/2,
-    overlaying unmod (solid) vs mod (dashed) UrQMD.
-    No NA61/SHINE data -- this is a purely UrQMD comparison plot.
+    Single panel: dn/dy per-event for K0S and (K++K-)/2, overlaying
+    UrQMD unmod (solid) and UrQMD(3:1) mod (dashed) curves against
+    NA61/SHINE Figure1 experimental points.
+
+    Analogue of make_rap_overlay but for per-event dn/dy.
     """
     csv_unmod = unmod_dir / "y_distributions_dn.csv"
     csv_mod   = mod_dir   / "y_distributions_dn.csv"
     if not csv_unmod.exists():
-        print(f"  [warn] {csv_unmod} not found -- skipping dn/dy overlay")
+        print(f"  [warn] {csv_unmod} not found -- skipping dn/dy overlay fig1")
         return
     if not csv_mod.exists():
-        print(f"  [warn] {csv_mod} not found -- skipping dn/dy overlay")
+        print(f"  [warn] {csv_mod} not found -- skipping dn/dy overlay fig1")
         return
 
     data_u = load_urqmd_dn_y_distributions(csv_unmod)
     data_m = load_urqmd_dn_y_distributions(csv_mod)
+    hy_k0s_x, hy_k0s_y, hy_k0s_ep, hy_k0s_em = load_hepdata(hep1a)
+    hy_kch_x, hy_kch_y, hy_kch_ep, hy_kch_em = load_hepdata(hep1b)
+
+    # Scale hep_data from dN/dy to dn/dy if needed:
+    # hep_data Figure1 is already in dN/dy; to compare to dn/dy we need N_ev.
+    # We derive N_ev from the unmod CSV header comment.
+    nev = _read_nev_from_dn_csv(csv_unmod)
+    hy_k0s_dn   = hy_k0s_y  / nev if nev else hy_k0s_y
+    hy_k0s_ep_n = hy_k0s_ep / nev if nev else hy_k0s_ep
+    hy_k0s_em_n = hy_k0s_em / nev if nev else hy_k0s_em
+    hy_kch_dn   = hy_kch_y  / nev if nev else hy_kch_y
+    hy_kch_ep_n = hy_kch_ep / nev if nev else hy_kch_ep
+    hy_kch_em_n = hy_kch_em / nev if nev else hy_kch_em
 
     fig, ax = plt.subplots(figsize=(6.5, 5.0))
 
-    # K0S curves
+    # UrQMD K0S
     if "K0S" in data_u:
         yc, val, err = data_u["K0S"]
         ax.errorbar(yc, val, yerr=err,
@@ -943,7 +959,7 @@ def make_dn_rap_overlay(
                     mfc="black", mec="black", color="black",
                     capsize=2, elinewidth=0.7)
 
-    # (K+ + K-)/2 curves -- compute on the fly from K+ and K-
+    # UrQMD (K++K-)/2
     for data, ls, mfc, prefix in (
         (data_u, "-",  "white", "UrQMD"),
         (data_m, "--", "black", "UrQMD(3:1)"),
@@ -960,6 +976,12 @@ def make_dn_rap_overlay(
                             mfc=mfc, mec="black", color="black",
                             capsize=2, elinewidth=0.7)
 
+    # NA61/SHINE exp points (rescaled to dn/dy)
+    ax.errorbar(hy_k0s_x, hy_k0s_dn, yerr=[hy_k0s_em_n, hy_k0s_ep_n],
+                label=r"NA61/SHINE $K^0_S$", **STYLE["exp_k0s"])
+    ax.errorbar(hy_kch_x, hy_kch_dn, yerr=[hy_kch_em_n, hy_kch_ep_n],
+                label=r"NA61/SHINE $(K^+ {+} K^-)/2$", **STYLE["exp_kch"])
+
     ax.set_xlabel(r"$y$")
     ax.set_ylabel(r"$dn/dy$")
     ax.xaxis.set_minor_locator(AutoMinorLocator())
@@ -972,76 +994,207 @@ def make_dn_rap_overlay(
 
 
 # ---------------------------------------------------------------------------
-# dn/dpT overlay -- unmod vs mod (K0S and (K++K-)/2), combined plot
+# dn/dpT overlay vs NA61/SHINE Figure2  (analogue of pt_overlay but for dn)
 # ---------------------------------------------------------------------------
 
-def make_dn_pt_overlay(
+def make_dn_pt_overlay_fig2(
     unmod_dir: Path,
     mod_dir: Path,
+    hep2a: Path,
+    hep2b: Path,
     outpath: Path,
 ) -> None:
     """
-    Single panel: dn/dpT per-event (log scale) for K0S and (K++K-)/2,
-    overlaying unmod (solid) vs mod (dashed) UrQMD.
-    No NA61/SHINE data -- this is a purely UrQMD comparison plot.
+    Two-panel: dn/dpT linear scale (top) + R(pT) (bottom), overlaying
+    UrQMD unmod (solid) and UrQMD(3:1) mod (dashed) curves against
+    NA61/SHINE Figure2 experimental points.
+
+    Analogue of make_pt_overlay but built on per-event dn instead of dN.
+    Both UrQMD variants are shown in the same figure for direct comparison.
+    The NA61/SHINE R(pT) band is derived from Boltzmann fits (same as
+    make_pt_overlay). UrQMD R(pT) is shown for both variants as lines.
     """
-    csv_unmod = unmod_dir / "pt_spectra_dn.csv"
-    csv_mod   = mod_dir   / "pt_spectra_dn.csv"
-    if not csv_unmod.exists():
-        print(f"  [warn] {csv_unmod} not found -- skipping dn/dpT overlay")
+    csv_unmod_pt = unmod_dir / "pt_spectra_dn.csv"
+    csv_mod_pt   = mod_dir   / "pt_spectra_dn.csv"
+    if not csv_unmod_pt.exists():
+        print(f"  [warn] {csv_unmod_pt} not found -- skipping dn/dpT overlay fig2")
         return
-    if not csv_mod.exists():
-        print(f"  [warn] {csv_mod} not found -- skipping dn/dpT overlay")
+    if not csv_mod_pt.exists():
+        print(f"  [warn] {csv_mod_pt} not found -- skipping dn/dpT overlay fig2")
         return
 
-    data_u = load_urqmd_dn_pt_spectra(csv_unmod)
-    data_m = load_urqmd_dn_pt_spectra(csv_mod)
+    data_u = load_urqmd_dn_pt_spectra(csv_unmod_pt)
+    data_m = load_urqmd_dn_pt_spectra(csv_mod_pt)
 
-    fig, ax = plt.subplots(figsize=(6.5, 5.0))
+    # Build dn/dpT for K0S and (K++K-)/2 from each variant
+    def _get_k0s_kch(data):
+        k0s = data.get("K0S", (np.array([]),)*3)
+        kp  = data.get("Kplus",  (np.array([]),)*3)
+        km  = data.get("Kminus", (np.array([]),)*3)
+        if len(kp[1]) == len(km[1]) > 0:
+            kch_pt  = kp[0]
+            kch_val = 0.5 * (kp[1] + km[1])
+            kch_err = 0.5 * np.sqrt(kp[2]**2 + km[2]**2)
+        else:
+            kch_pt = kch_val = kch_err = np.array([])
+        return k0s, (kch_pt, kch_val, kch_err)
 
-    # K0S curves
-    if "K0S" in data_u:
-        pt, val, err = data_u["K0S"]
-        ax.errorbar(pt, val, yerr=err,
+    k0s_u, kch_u = _get_k0s_kch(data_u)
+    k0s_m, kch_m = _get_k0s_kch(data_m)
+
+    # Compute R(pT) for each UrQMD variant (bin-by-bin)
+    def _ratio_from_kch_k0s(kch, k0s):
+        pt_r = kch[0] if len(kch[0]) > 0 else np.array([])
+        if len(pt_r) == 0 or len(k0s[0]) == 0:
+            return pt_r, np.full(len(pt_r), np.nan)
+        k0s_interp = np.interp(pt_r, k0s[0], k0s[1],
+                                left=np.nan, right=np.nan)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            R = np.where(k0s_interp > 0, kch[1] / k0s_interp, np.nan)
+        return pt_r, R
+
+    pt_r_u, R_u = _ratio_from_kch_k0s(kch_u, k0s_u)
+    pt_r_m, R_m = _ratio_from_kch_k0s(kch_m, k0s_m)
+
+    # Load NA61/SHINE Figure2 data
+    hep2a_x, hep2a_y, hep2a_ep, hep2a_em = load_hepdata(hep2a)
+    hep2b_x, hep2b_y, hep2b_ep, hep2b_em = load_hepdata(hep2b)
+
+    # Rescale Figure2 (dN/dpT) to dn/dpT using N_ev from unmod dn CSV
+    nev = _read_nev_from_dn_csv(csv_unmod_pt)
+    if nev:
+        hep2a_dn   = hep2a_y  / nev
+        hep2a_ep_n = hep2a_ep / nev
+        hep2a_em_n = hep2a_em / nev
+        hep2b_dn   = hep2b_y  / nev
+        hep2b_ep_n = hep2b_ep / nev
+        hep2b_em_n = hep2b_em / nev
+    else:
+        hep2a_dn, hep2a_ep_n, hep2a_em_n = hep2a_y, hep2a_ep, hep2a_em
+        hep2b_dn, hep2b_ep_n, hep2b_em_n = hep2b_y, hep2b_ep, hep2b_em
+
+    # Build NA61/SHINE R(pT) band from Boltzmann fits on rescaled dn data
+    pt_lo = max(min(hep2a_x.min(), hep2b_x.min()) - 0.05, 0.0)
+    pt_hi = max(hep2a_x.max(), hep2b_x.max()) + 0.1
+    pt_fine = np.linspace(pt_lo, pt_hi, 300)
+
+    R_fit, R_sigma = _ratio_band_from_fits(
+        hep2a_x, hep2a_dn, hep2a_ep_n, hep2a_em_n,
+        hep2b_x, hep2b_dn, hep2b_ep_n, hep2b_em_n,
+        pt_fine,
+    )
+    use_fit_band = (R_fit is not None)
+    if not use_fit_band:
+        print("  [warn] Boltzmann fit failed -- falling back to bin-by-bin R(pT) errors (dn fig2)")
+        kch_on_k0s = np.interp(hep2a_x, hep2b_x, hep2b_dn)
+        kch_ep_i   = np.interp(hep2a_x, hep2b_x, hep2b_ep_n)
+        kch_em_i   = np.interp(hep2a_x, hep2b_x, hep2b_em_n)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            R_exp_fb = np.where(hep2a_dn > 0, kch_on_k0s / hep2a_dn, np.nan)
+            R_exp_err_fb = np.abs(R_exp_fb) * np.sqrt(
+                ((0.5*(kch_ep_i + kch_em_i)) / np.where(kch_on_k0s > 0, kch_on_k0s, 1.0))**2 +
+                ((0.5*(hep2a_ep_n + hep2a_em_n)) / np.where(hep2a_dn > 0, hep2a_dn, 1.0))**2
+            )
+
+    # --- Figure layout -------------------------------------------------------
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1, figsize=(6.5, 7.5),
+        gridspec_kw={"height_ratios": [2.5, 1], "hspace": 0.05},
+        sharex=True,
+    )
+
+    # Top panel: dn/dpT spectra (linear)
+    if len(k0s_u[1]) > 0:
+        ax_top.plot(k0s_u[0], k0s_u[1],
                     label=r"UrQMD $K^0_S$",
-                    ls="-", lw=1.4, marker="^", ms=4,
-                    mfc="white", mec="black", color="black",
-                    capsize=2, elinewidth=0.7)
-    if "K0S" in data_m:
-        pt, val, err = data_m["K0S"]
-        ax.errorbar(pt, val, yerr=err,
+                    **STYLE["urqmd_k0s"])
+    if len(k0s_m[1]) > 0:
+        ax_top.plot(k0s_m[0], k0s_m[1],
                     label=r"UrQMD(3:1) $K^0_S$",
-                    ls="--", lw=1.4, marker="^", ms=4,
-                    mfc="black", mec="black", color="black",
-                    capsize=2, elinewidth=0.7)
+                    ls="--", lw=1.4, marker="None", color="black")
+    if len(kch_u[1]) > 0:
+        ax_top.plot(kch_u[0], kch_u[1],
+                    label=r"UrQMD $(K^+ {+} K^-)/2$",
+                    **STYLE["urqmd_kch"])
+    if len(kch_m[1]) > 0:
+        ax_top.plot(kch_m[0], kch_m[1],
+                    label=r"UrQMD(3:1) $(K^+ {+} K^-)/2$",
+                    ls="-.", lw=1.4, marker="None", color="black")
+    ax_top.errorbar(hep2a_x, hep2a_dn, yerr=[hep2a_em_n, hep2a_ep_n],
+                    label=r"NA61/SHINE $K^0_S$", **STYLE["exp_k0s"])
+    ax_top.errorbar(hep2b_x, hep2b_dn, yerr=[hep2b_em_n, hep2b_ep_n],
+                    label=r"NA61/SHINE $(K^+ {+} K^-)/2$", **STYLE["exp_kch"])
 
-    # (K+ + K-)/2 curves
-    for data, ls, mfc, prefix in (
-        (data_u, "-",  "white", "UrQMD"),
-        (data_m, "--", "black", "UrQMD(3:1)"),
-    ):
-        if "Kplus" in data and "Kminus" in data:
-            pt_p, vp, ep = data["Kplus"]
-            pt_m, vm, em = data["Kminus"]
-            if len(pt_p) == len(pt_m):
-                kch_val = 0.5 * (vp + vm)
-                kch_err = 0.5 * np.sqrt(ep**2 + em**2)
-                ax.errorbar(pt_p, kch_val, yerr=kch_err,
-                            label=rf"{prefix} $(K^+ {{+}} K^-)/2$",
-                            ls=ls, lw=1.4, marker="o", ms=4,
-                            mfc=mfc, mec="black", color="black",
-                            capsize=2, elinewidth=0.7)
+    ax_top.yaxis.set_minor_locator(AutoMinorLocator())
+    ax_top.set_ylabel(r"$dn/dp_T\;[(\mathrm{GeV}/c)^{-1}]$")
+    ax_top.legend(loc="upper right", fontsize=8)
+    ax_top.tick_params(labelbottom=False)
 
-    ax.set_yscale("log")
-    ax.set_xlabel(r"$p_T\;[\mathrm{GeV}/c]$")
-    ax.set_ylabel(r"$dn/dp_T\;[(\mathrm{GeV}/c)^{-1}]$")
-    ax.xaxis.set_minor_locator(AutoMinorLocator())
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    ax.legend(loc="upper right", fontsize=8)
+    # Bottom panel: R(pT)
+    ax_bot.axhline(1.0, ls=":", lw=0.9, color="black")
+
+    finite_u = np.isfinite(R_u)
+    if finite_u.any():
+        ax_bot.plot(pt_r_u[finite_u], R_u[finite_u],
+                    label=r"UrQMD",
+                    **STYLE["ratio_urqmd"])
+    finite_m = np.isfinite(R_m)
+    if finite_m.any():
+        ax_bot.plot(pt_r_m[finite_m], R_m[finite_m],
+                    label=r"UrQMD(3:1)",
+                    ls="--", lw=1.4, marker="None", color="black")
+
+    if use_fit_band:
+        finite_b = np.isfinite(R_fit) & np.isfinite(R_sigma)
+        if finite_b.any():
+            ax_bot.fill_between(
+                pt_fine[finite_b],
+                (R_fit - R_sigma)[finite_b],
+                (R_fit + R_sigma)[finite_b],
+                alpha=0.35, color="black",
+                label=r"NA61/SHINE",
+            )
+    else:
+        finite_e = np.isfinite(R_exp_fb)
+        if finite_e.any():
+            ax_bot.errorbar(hep2a_x[finite_e], R_exp_fb[finite_e],
+                            yerr=R_exp_err_fb[finite_e],
+                            label=r"NA61/SHINE",
+                            **STYLE["ratio_exp"])
+
+    ax_bot.set_xlabel(r"$p_T\;[\mathrm{GeV}/c]$")
+    ax_bot.set_ylabel(r"$R(p_T)$")
+    ax_bot.xaxis.set_minor_locator(AutoMinorLocator())
+    ax_bot.yaxis.set_minor_locator(AutoMinorLocator())
+    ax_bot.legend(loc="upper right", fontsize=8)
+
+    fig.align_ylabels([ax_top, ax_bot])
     fig.tight_layout()
     _save(fig, outpath)
     plt.close(fig)
     print(f"  wrote {outpath.with_suffix('.eps')}")
+
+
+# ---------------------------------------------------------------------------
+# Helper: read N_ev from the comment line in a dn CSV
+# ---------------------------------------------------------------------------
+
+def _read_nev_from_dn_csv(path: Path) -> Optional[int]:
+    """Read N_ev from the first comment line of a dn CSV (e.g. '# dn/dy per-event spectrum; N_ev=5000')."""
+    try:
+        with open(path, newline="") as f:
+            for line in f:
+                s = line.strip()
+                if not s:
+                    continue
+                if s.startswith("#") and "N_ev=" in s:
+                    part = s.split("N_ev=")[-1].strip().split()[0].rstrip(",;")
+                    return int(part)
+                if not s.startswith("#"):
+                    break
+    except (OSError, ValueError):
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1226,17 +1379,18 @@ def process_system(
     make_pan_ratio_y(unmod_dir,    sys_def.out(outdir, "pan_ratio_y",    mod=False))
     make_pan_ratio_y(mod_dir,      sys_def.out(outdir, "pan_ratio_y",    mod=True))
 
-    print("  dn/dy overlay (unmod vs mod UrQMD)...")
-    make_dn_rap_overlay(
-        unmod_dir, mod_dir,
-        sys_def.out(outdir, "dn_rap_overlay"),
-    )
+    if hep_ok:
+        print("  dn/dy overlay vs NA61/SHINE Figure1 (unmod+mod UrQMD)...")
+        make_dn_rap_overlay_fig1(
+            unmod_dir, mod_dir, hep1a, hep1b,
+            sys_def.out(outdir, "dn_rap_overlay_fig1"),
+        )
 
-    print("  dn/dpT overlay (unmod vs mod UrQMD)...")
-    make_dn_pt_overlay(
-        unmod_dir, mod_dir,
-        sys_def.out(outdir, "dn_pt_overlay"),
-    )
+        print("  dn/dpT overlay vs NA61/SHINE Figure2 (unmod+mod UrQMD, linear+R)...")
+        make_dn_pt_overlay_fig2(
+            unmod_dir, mod_dir, hep2a, hep2b,
+            sys_def.out(outdir, "dn_pt_overlay_fig2"),
+        )
 
     if hep7 is not None and hep7.exists():
         print("  K0S d^2n/dydpT combined overlay (unmod+mod UrQMD vs NA61/SHINE)...")
