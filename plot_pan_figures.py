@@ -11,24 +11,30 @@ NA61/SHINE HepData CSVs for multiple collision systems:
   - C+C    @ sqrt(s_NN) = 34.1 GeV  (target frame)
   - Xe+W   @ sqrt(s_NN) =  2.9 GeV  (target frame)
 
-Outputs per system (all as .eps + .png), named as:
-  {tag}_{energy}_fig1_unmod.*
-  {tag}_{energy}_fig1_mod.*
-  {tag}_{energy}_fig2_unmod.*
-  {tag}_{energy}_fig2_mod.*
-  {tag}_{energy}_pan_y_species_unmod.*
-  {tag}_{energy}_pan_y_species_mod.*
-  {tag}_{energy}_pan_pt_species_unmod.*
-  {tag}_{energy}_pan_pt_species_mod.*
-  {tag}_{energy}_pan_ratio_y_unmod.*
-  {tag}_{energy}_pan_ratio_y_mod.*
+Outputs per system (all as .eps + .png), e.g. for Ar+Sc:
+  ArSc_11p9GeV_fig1_unmod.{eps,png}
+  ArSc_11p9GeV_fig1_mod.{eps,png}
+  ArSc_11p9GeV_fig2_unmod.{eps,png}
+  ArSc_11p9GeV_fig2_mod.{eps,png}
+  ArSc_11p9GeV_pan_y_species_unmod.{eps,png}
+  ArSc_11p9GeV_pan_y_species_mod.{eps,png}
+  ArSc_11p9GeV_pan_pt_species_unmod.{eps,png}
+  ArSc_11p9GeV_pan_pt_species_mod.{eps,png}
+  ArSc_11p9GeV_pan_ratio_y_unmod.{eps,png}
+  ArSc_11p9GeV_pan_ratio_y_mod.{eps,png}
 
-Journal requirements targeted
------------------------------
-* Grayscale / black-and-white only (no color).
-* Curves distinguished by linestyle + marker shape and filling.
-* EPS vector output suitable for "Ядерная физика" guidelines.
-* Axes labels in LaTeX math style, minimal on-plot text.
+NOTE: energy_str uses 'p' instead of '.' (e.g. 11p9GeV) to avoid
+Windows treating the decimal as a file extension separator.
+
+PAN journal style notes
+-----------------------
+* No in-plot titles -- system/energy/variant info goes in the LaTeX caption.
+* UrQMD vs UrQMD(3:1) labels appear only in overlay figs (fig1/fig2)
+  where UrQMD curves are directly compared against NA61/SHINE data.
+* PAN-only UrQMD plots show only species labels (K+, K-, K0S).
+* Grayscale / black-and-white only.
+* Curves distinguished by linestyle + marker shape.
+* EPS vector output suitable for Yadernaya Fizika submission.
 """
 
 from __future__ import annotations
@@ -48,11 +54,11 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 
 # ---------------------------------------------------------------------------
-# Global style – black & white, print-friendly
+# Global style
 # ---------------------------------------------------------------------------
 
 plt.rcParams.update({
-    "text.usetex": False,          # set True if LaTeX is available
+    "text.usetex": False,
     "font.family": "serif",
     "font.size": 11,
     "axes.linewidth": 0.8,
@@ -74,29 +80,25 @@ plt.rcParams.update({
 # ---------------------------------------------------------------------------
 
 STYLE = {
-    # article-type overlays
-    "urqmd_k0s": dict(ls="-",  lw=1.4, marker="None", color="black"),
-    "urqmd_kch": dict(ls="--", lw=1.4, marker="None", color="black"),
-    "exp_k0s":   dict(ls="None", marker="o", ms=5,
-                      mfc="black", mec="black", color="black",
-                      capsize=3, elinewidth=0.8),
-    "exp_kch":   dict(ls="None", marker="s", ms=5,
-                      mfc="white", mec="black", color="black",
-                      capsize=3, elinewidth=0.8),
-    "ratio_urqmd": dict(ls="-",  lw=1.4, marker="None", color="black"),
+    "urqmd_k0s":   dict(ls="-",    lw=1.4, marker="None", color="black"),
+    "urqmd_kch":   dict(ls="--",   lw=1.4, marker="None", color="black"),
+    "exp_k0s":     dict(ls="None", marker="o", ms=5,
+                        mfc="black", mec="black", color="black",
+                        capsize=3, elinewidth=0.8),
+    "exp_kch":     dict(ls="None", marker="s", ms=5,
+                        mfc="white", mec="black", color="black",
+                        capsize=3, elinewidth=0.8),
+    "ratio_urqmd": dict(ls="-",    lw=1.4, marker="None", color="black"),
     "ratio_exp":   dict(ls="None", marker="^", ms=5,
                         mfc="black", mec="black", color="black",
                         capsize=3, elinewidth=0.8),
-
-    # PAN-style UrQMD-only multi-species plots
-    "Kplus":   dict(ls="-",  lw=1.3, marker="o", ms=4,
-                    mfc="white", mec="black", color="black"),
-    "Kminus":  dict(ls="--", lw=1.3, marker="s", ms=4,
-                    mfc="black", mec="black", color="black"),
-    "K0S":     dict(ls="-.", lw=1.3, marker="^", ms=4,
-                    mfc="white", mec="black", color="black"),
-
-    # PAN-style R_K(y)
+    # PAN-only species
+    "Kplus":  dict(ls="-",  lw=1.3, marker="o", ms=4,
+                   mfc="white", mec="black", color="black"),
+    "Kminus": dict(ls="--", lw=1.3, marker="s", ms=4,
+                   mfc="black", mec="black", color="black"),
+    "K0S":    dict(ls="-.", lw=1.3, marker="^", ms=4,
+                   mfc="white", mec="black", color="black"),
     "ratio_y": dict(ls="-", lw=1.4, marker="o", ms=4,
                     mfc="black", mec="black", color="black"),
 }
@@ -113,81 +115,62 @@ SPECIES_LABEL = {
 
 @dataclass
 class SystemDef:
-    """Definition of one collision system."""
-    tag: str          # short tag for filenames, e.g. "ArSc"
-    label: str        # human-readable collision label, e.g. "Ar+Sc"
-    energy_str: str   # plain-text energy for filenames, e.g. "11.9GeV"
-    energy_label: str # LaTeX energy for plot titles, e.g. r"$\sqrt{s_{NN}}=11.9\,\mathrm{GeV}$"
-    unmod_dir: str    # path relative to urqmd_base
-    mod_dir: str      # path relative to urqmd_base
-    hep1a: str        # HepData CSV name for Fig1 K0S rapidity
-    hep1b: str        # HepData CSV name for Fig1 (K++K-)/2 rapidity
-    hep2a: str        # HepData CSV name for Fig2 K0S pT
-    hep2b: str        # HepData CSV name for Fig2 (K++K-)/2 pT
-
-    def stem(self) -> str:
-        """Base filename stem: '{tag}_{energy_str}', e.g. 'ArSc_11.9GeV'."""
-        return f"{self.tag}_{self.energy_str}"
+    tag: str          # e.g. "ArSc"
+    label: str        # e.g. "Ar+Sc"  (for captions, not used on-plot)
+    energy_str: str   # plain filename-safe energy, e.g. "11p9GeV"  (NO dot!)
+    energy_label: str # LaTeX for captions, e.g. r"$\sqrt{s_{NN}}=11.9$ GeV"
+    unmod_dir: str
+    mod_dir: str
+    hep1a: str
+    hep1b: str
+    hep2a: str
+    hep2b: str
 
     def out(self, outdir: Path, kind: str, mod: bool) -> Path:
         """
-        Build a full output path.
-        kind  -- e.g. 'fig1', 'fig2', 'pan_y_species', 'pan_pt_species', 'pan_ratio_y'
-        mod   -- True -> suffix '_mod', False -> '_unmod'
-        Example: ArSc_11.9GeV_pan_y_species_mod
+        Build output path: {outdir}/{tag}_{energy_str}_{kind}_{mod|unmod}
+        e.g. pan_figures/ArSc_11p9GeV_fig1_mod
         """
         suffix = "mod" if mod else "unmod"
-        return outdir / f"{self.stem()}_{kind}_{suffix}"
+        return outdir / f"{self.tag}_{self.energy_str}_{kind}_{suffix}"
 
 
 ALL_SYSTEMS: List[SystemDef] = [
     SystemDef(
-        tag="ArSc",
-        label="Ar+Sc",
-        energy_str="11.9GeV",
+        tag="ArSc", label="Ar+Sc",
+        energy_str="11p9GeV",
         energy_label=r"$\sqrt{s_{NN}}=11.9\,\mathrm{GeV}$",
         unmod_dir="ArSc-kaons-11.9GeV-ecm-collision/results",
         mod_dir="ArSc-kaons-11.9GeV-ecm-collision-modified-ud/results",
-        hep1a="Figure1a.csv",
-        hep1b="Figure1b.csv",
-        hep2a="Figure2a.csv",
-        hep2b="Figure2b.csv",
+        hep1a="Figure1a.csv", hep1b="Figure1b.csv",
+        hep2a="Figure2a.csv", hep2b="Figure2b.csv",
     ),
     SystemDef(
-        tag="XeXe",
-        label="Xe+Xe",
-        energy_str="9.2GeV",
+        tag="XeXe", label="Xe+Xe",
+        energy_str="9p2GeV",
         energy_label=r"$\sqrt{s_{NN}}=9.2\,\mathrm{GeV}$",
         unmod_dir="XeXe-kaons-9.2GeV-ecm-collision/results",
         mod_dir="XeXe-kaons-9.2GeV-ecm-collision-modified-ud/results",
-        hep1a="XeXe_Figure1a.csv",
-        hep1b="XeXe_Figure1b.csv",
-        hep2a="XeXe_Figure2a.csv",
-        hep2b="XeXe_Figure2b.csv",
+        hep1a="XeXe_Figure1a.csv", hep1b="XeXe_Figure1b.csv",
+        hep2a="XeXe_Figure2a.csv", hep2b="XeXe_Figure2b.csv",
     ),
     SystemDef(
-        tag="CC",
-        label="C+C",
-        energy_str="34.1GeV",
+        tag="CC", label="C+C",
+        energy_str="34p1GeV",
         energy_label=r"$\sqrt{s_{NN}}=34.1\,\mathrm{GeV}$",
         unmod_dir="CC-kaons-34.1GeV-ecm-target/results",
         mod_dir="CC-kaons-34.1GeV-ecm-target-modified-ud/results",
-        hep1a="CC_Figure1a.csv",
-        hep1b="CC_Figure1b.csv",
-        hep2a="CC_Figure2a.csv",
-        hep2b="CC_Figure2b.csv",
+        hep1a="CC_Figure1a.csv", hep1b="CC_Figure1b.csv",
+        hep2a="CC_Figure2a.csv", hep2b="CC_Figure2b.csv",
     ),
     SystemDef(
-        tag="XeW",
-        label="Xe+W",
-        energy_str="2.9GeV",
+        tag="XeW", label="Xe+W",
+        energy_str="2p9GeV",
         energy_label=r"$\sqrt{s_{NN}}=2.9\,\mathrm{GeV}$",
         unmod_dir="XeW-kaons-2.9GeV-ecm-target/results",
         mod_dir="XeW-kaons-2.9GeV-ecm-target-modified-ud/results",
-        hep1a="XeW_Figure1a.csv",
-        hep1b="XeW_Figure1b.csv",
-        hep2a="XeW_Figure2a.csv",
-        hep2b="XeW_Figure2b.csv",
+        hep1a="XeW_Figure1a.csv", hep1b="XeW_Figure1b.csv",
+        hep2a="XeW_Figure2a.csv", hep2b="XeW_Figure2b.csv",
     ),
 ]
 
@@ -207,10 +190,9 @@ def _skip_comments_lines(path: Path) -> List[str]:
 
 
 def load_hepdata(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return (x, y, err_up, err_dn) from a HepData-style CSV."""
     rows = _skip_comments_lines(path)
     reader = csv.reader(rows)
-    header = next(reader, None)
+    next(reader, None)
     xs, ys, eup, edn = [], [], [], []
     for row in reader:
         if len(row) < 4:
@@ -223,15 +205,6 @@ def load_hepdata(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.nda
 
 
 def load_urqmd_ydist_meancharged(path: Path):
-    """
-    Load y_distributions_meancharged.csv produced by analyze_urqmd_kaons.py.
-
-    Columns: y_lo, y_hi, y_center,
-             KmeanCharged_value, KmeanCharged_err,
-             TwoK0S_value, TwoK0S_err
-
-    Returns (y_centers, kch_vals, kch_err, k0s_vals, k0s_err).
-    """
     rows = _skip_comments_lines(path)
     reader = csv.reader(rows)
     next(reader, None)
@@ -249,66 +222,42 @@ def load_urqmd_ydist_meancharged(path: Path):
 
 
 def load_urqmd_y_distributions(path: Path) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """
-    Load y_distributions.csv (K+, K-, K0S, one species per row).
-
-    Columns: species, y_lo, y_hi, y_center, counts, value, error
-    Returns dict[species] -> (y_center, value, error).
-    """
     rows = _skip_comments_lines(path)
     reader = csv.reader(rows)
     next(reader, None)
-    data: Dict[str, Tuple[List[float], List[float], List[float]]] = {}
+    data: Dict[str, Tuple[List, List, List]] = {}
     for row in reader:
         if len(row) < 7:
             continue
         sp = row[0].strip()
-        yc = float(row[3])
-        val = float(row[5])
-        err = float(row[6])
         if sp not in data:
             data[sp] = ([], [], [])
-        data[sp][0].append(yc)
-        data[sp][1].append(val)
-        data[sp][2].append(err)
+        data[sp][0].append(float(row[3]))
+        data[sp][1].append(float(row[5]))
+        data[sp][2].append(float(row[6]))
     return {sp: (np.array(v[0]), np.array(v[1]), np.array(v[2]))
             for sp, v in data.items()}
 
 
 def load_urqmd_pt_spectra(path: Path) -> Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """
-    Load pt_spectra.csv.
-
-    Columns: species, pt_lo, pt_hi, pt_center, counts, value, error
-    Returns dict[species] -> (pt_center, value, error).
-    """
     rows = _skip_comments_lines(path)
     reader = csv.reader(rows)
     next(reader, None)
-    data: Dict[str, Tuple[List[float], List[float], List[float]]] = {}
+    data: Dict[str, Tuple[List, List, List]] = {}
     for row in reader:
         if len(row) < 7:
             continue
         sp = row[0].strip()
-        pt = float(row[3])
-        val = float(row[5])
-        err = float(row[6])
         if sp not in data:
             data[sp] = ([], [], [])
-        data[sp][0].append(pt)
-        data[sp][1].append(val)
-        data[sp][2].append(err)
+        data[sp][0].append(float(row[3]))
+        data[sp][1].append(float(row[5]))
+        data[sp][2].append(float(row[6]))
     return {sp: (np.array(v[0]), np.array(v[1]), np.array(v[2]))
             for sp, v in data.items()}
 
 
 def load_urqmd_ratio_pt(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Load ratio_pt.csv.
-
-    Columns: pt_lo, pt_hi, pt_center, K+, K-, K0S, R, R_err
-    Returns (pt_center, R, R_err).
-    """
     rows = _skip_comments_lines(path)
     reader = csv.reader(rows)
     next(reader, None)
@@ -323,12 +272,6 @@ def load_urqmd_ratio_pt(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
 def load_urqmd_ratio_y(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Load ratio_y.csv.
-
-    Columns: y_lo, y_hi, y_center, K+, K-, K0S, R_K, R_K_err
-    Returns (y_center, R_K, R_K_err).
-    """
     rows = _skip_comments_lines(path)
     reader = csv.reader(rows)
     next(reader, None)
@@ -342,7 +285,7 @@ def load_urqmd_ratio_y(path: Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     return np.array(yc), np.array(Rk), np.array(Rk_e)
 
 # ---------------------------------------------------------------------------
-# Save helper – EPS + PNG
+# Save helper
 # ---------------------------------------------------------------------------
 
 def _save(fig, base_path: Path) -> None:
@@ -350,10 +293,15 @@ def _save(fig, base_path: Path) -> None:
     fig.savefig(base_path.with_suffix(".png"), dpi=200, bbox_inches="tight")
 
 # ---------------------------------------------------------------------------
-# Legend label helpers
+# Legend label helpers (used ONLY in overlay fig1/fig2)
 # ---------------------------------------------------------------------------
 
-def _urqmd_label(species_tex: str, modified: bool) -> str:
+def _urqmd_overlay_label(species_tex: str, modified: bool) -> str:
+    """
+    Legend entry for UrQMD curves in overlay (NA61 comparison) figures.
+    modified=True  -> "UrQMD(3:1) $K^0_S$"
+    modified=False -> "UrQMD $K^0_S$"
+    """
     prefix = r"UrQMD(3:1)" if modified else r"UrQMD"
     return rf"{prefix} {species_tex}"
 
@@ -361,13 +309,8 @@ def _urqmd_label(species_tex: str, modified: bool) -> str:
 def _urqmd_ratio_label(modified: bool) -> str:
     return r"UrQMD(3:1)" if modified else r"UrQMD"
 
-
-def _title(sys_def: SystemDef, modified: bool) -> str:
-    prefix = r"UrQMD(3:1)" if modified else r"UrQMD"
-    return rf"{prefix}  {sys_def.label}  {sys_def.energy_label}"
-
 # ---------------------------------------------------------------------------
-# Article-style Figure 1 – rapidity overlays
+# Article-style Figure 1 -- rapidity overlays (UrQMD vs NA61/SHINE)
 # ---------------------------------------------------------------------------
 
 def make_fig1(
@@ -375,10 +318,14 @@ def make_fig1(
     hep1a: Path,
     hep1b: Path,
     outpath: Path,
-    sys_def: Optional[SystemDef] = None,
     modified: bool = False,
 ) -> None:
-    """Single panel: dN/dy for K0S and (K++K-)/2."""
+    """
+    Single panel: dN/dy for K0S and (K++K-)/2.
+    UrQMD as lines labelled UrQMD / UrQMD(3:1);
+    NA61/SHINE as points with error bars.
+    No in-plot title -- system/energy go in LaTeX caption.
+    """
     yc, kch_vals, kch_err, k0s_vals, k0s_err = load_urqmd_ydist_meancharged(
         urqmd_dir / "y_distributions_meancharged.csv"
     )
@@ -387,15 +334,16 @@ def make_fig1(
 
     fig, ax = plt.subplots(figsize=(6.5, 5.0))
 
-    ax.plot(yc, k0s_vals, label=_urqmd_label(r"$K^0_S$", modified), **STYLE["urqmd_k0s"])
-    ax.plot(yc, kch_vals, label=_urqmd_label(r"$(K^+ + K^-)/2$", modified), **STYLE["urqmd_kch"])
+    ax.plot(yc, k0s_vals,
+            label=_urqmd_overlay_label(r"$K^0_S$", modified),
+            **STYLE["urqmd_k0s"])
+    ax.plot(yc, kch_vals,
+            label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
+            **STYLE["urqmd_kch"])
     ax.errorbar(hy_k0s_x, hy_k0s_y, yerr=[hy_k0s_em, hy_k0s_ep],
                 label=r"NA61/SHINE $K^0_S$", **STYLE["exp_k0s"])
     ax.errorbar(hy_kch_x, hy_kch_y, yerr=[hy_kch_em, hy_kch_ep],
-                label=r"NA61/SHINE $(K^+ + K^-)/2$", **STYLE["exp_kch"])
-
-    if sys_def is not None:
-        ax.set_title(_title(sys_def, modified), fontsize=10)
+                label=r"NA61/SHINE $(K^+ {+} K^-)/2$", **STYLE["exp_kch"])
 
     ax.set_xlabel(r"$y$")
     ax.set_ylabel(r"$dN/dy$")
@@ -409,7 +357,7 @@ def make_fig1(
     print(f"  wrote {outpath.with_suffix('.eps')}")
 
 # ---------------------------------------------------------------------------
-# Article-style Figure 2 – pT overlays + ratio
+# Article-style Figure 2 -- pT overlays + ratio (UrQMD vs NA61/SHINE)
 # ---------------------------------------------------------------------------
 
 def make_fig2(
@@ -417,23 +365,24 @@ def make_fig2(
     hep2a: Path,
     hep2b: Path,
     outpath: Path,
-    sys_def: Optional[SystemDef] = None,
     modified: bool = False,
     log_top: bool = True,
 ) -> None:
     """
-    Two-panel figure:
-      top:    dN/dpT  (log_top=True -> log scale; False -> linear, matching paper Fig.2)
-      bottom: R(pT) = (K++K-)/2 / K0S
+    Two-panel: dN/dpT (top) + R(pT) (bottom).
+    log_top=True  -> log y on top panel  (unmodified)
+    log_top=False -> linear y on top panel (modified, matching paper)
+    UrQMD(3:1) label only when modified=True.
+    No in-plot title.
     """
     pt_data = load_urqmd_pt_spectra(urqmd_dir / "pt_spectra.csv")
-    pt_r, R_urqmd, R_urqmd_e = load_urqmd_ratio_pt(urqmd_dir / "ratio_pt.csv")
+    pt_r, R_urqmd, _ = load_urqmd_ratio_pt(urqmd_dir / "ratio_pt.csv")
 
-    k0s_pt, k0s_val, _k0s_err = pt_data.get("K0S", (np.array([]),)*3)
-    kp_pt, kp_val, kp_err     = pt_data.get("Kplus",  (np.array([]),)*3)
-    km_pt, km_val, km_err     = pt_data.get("Kminus", (np.array([]),)*3)
+    k0s_pt, k0s_val, _e  = pt_data.get("K0S",    (np.array([]),)*3)
+    kp_pt,  kp_val,  kp_err = pt_data.get("Kplus",  (np.array([]),)*3)
+    km_pt,  km_val,  km_err = pt_data.get("Kminus", (np.array([]),)*3)
 
-    if len(kp_val) == len(km_val) and len(kp_val) > 0:
+    if len(kp_val) == len(km_val) > 0:
         kch_pt  = kp_pt
         kch_val = 0.5 * (kp_val + km_val)
         kch_err = 0.5 * np.sqrt(kp_err**2 + km_err**2)
@@ -443,10 +392,9 @@ def make_fig2(
     hep2a_x, hep2a_y, hep2a_ep, hep2a_em = load_hepdata(hep2a)
     hep2b_x, hep2b_y, hep2b_ep, hep2b_em = load_hepdata(hep2b)
 
-    from numpy import interp
-    kch_on_k0s = interp(hep2a_x, hep2b_x, hep2b_y)
-    kch_ep_i   = interp(hep2a_x, hep2b_x, hep2b_ep)
-    kch_em_i   = interp(hep2a_x, hep2b_x, hep2b_em)
+    kch_on_k0s = np.interp(hep2a_x, hep2b_x, hep2b_y)
+    kch_ep_i   = np.interp(hep2a_x, hep2b_x, hep2b_ep)
+    kch_em_i   = np.interp(hep2a_x, hep2b_x, hep2b_em)
     with np.errstate(invalid="ignore", divide="ignore"):
         R_exp = np.where(hep2a_y > 0, kch_on_k0s / hep2a_y, np.nan)
         R_exp_err = np.abs(R_exp) * np.sqrt(
@@ -461,21 +409,23 @@ def make_fig2(
     )
 
     if len(k0s_val) > 0:
-        ax_top.plot(k0s_pt, k0s_val, label=_urqmd_label(r"$K^0_S$", modified), **STYLE["urqmd_k0s"])
+        ax_top.plot(k0s_pt, k0s_val,
+                    label=_urqmd_overlay_label(r"$K^0_S$", modified),
+                    **STYLE["urqmd_k0s"])
     if len(kch_val) > 0:
-        ax_top.plot(kch_pt, kch_val, label=_urqmd_label(r"$(K^+ + K^-)/2$", modified), **STYLE["urqmd_kch"])
+        ax_top.plot(kch_pt, kch_val,
+                    label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
+                    **STYLE["urqmd_kch"])
     ax_top.errorbar(hep2a_x, hep2a_y, yerr=[hep2a_em, hep2a_ep],
                     label=r"NA61/SHINE $K^0_S$", **STYLE["exp_k0s"])
     ax_top.errorbar(hep2b_x, hep2b_y, yerr=[hep2b_em, hep2b_ep],
-                    label=r"NA61/SHINE $(K^+ + K^-)/2$", **STYLE["exp_kch"])
+                    label=r"NA61/SHINE $(K^+ {+} K^-)/2$", **STYLE["exp_kch"])
 
     ax_top.set_yscale("log" if log_top else "linear")
     ax_top.yaxis.set_minor_locator(AutoMinorLocator())
     ax_top.set_ylabel(r"$dN/dp_T\;[(\mathrm{GeV}/c)^{-1}]$")
     ax_top.legend(loc="upper right")
     ax_top.tick_params(labelbottom=False)
-    if sys_def is not None:
-        ax_top.set_title(_title(sys_def, modified), fontsize=10)
 
     finite_u = np.isfinite(R_urqmd)
     finite_e = np.isfinite(R_exp)
@@ -485,7 +435,8 @@ def make_fig2(
                     label=_urqmd_ratio_label(modified), **STYLE["ratio_urqmd"])
     if finite_e.any():
         ax_bot.errorbar(hep2a_x[finite_e], R_exp[finite_e],
-                        yerr=R_exp_err[finite_e], label="NA61/SHINE", **STYLE["ratio_exp"])
+                        yerr=R_exp_err[finite_e],
+                        label="NA61/SHINE", **STYLE["ratio_exp"])
 
     ax_bot.set_xlabel(r"$p_T\;[\mathrm{GeV}/c]$")
     ax_bot.set_ylabel(r"$R(p_T)$")
@@ -501,16 +452,14 @@ def make_fig2(
     print(f"  wrote {outpath.with_suffix('.eps')}")
 
 # ---------------------------------------------------------------------------
-# PAN-style UrQMD-only plots (no NA61)
+# PAN-style UrQMD-only plots -- species labels only, no UrQMD prefix
 # ---------------------------------------------------------------------------
 
 def make_pan_y_species(
     urqmd_dir: Path,
     outpath: Path,
-    sys_def: Optional[SystemDef] = None,
-    modified: bool = False,
 ) -> None:
-    """PAN-style dN/dy for K+, K-, K0S."""
+    """PAN-style dN/dy for K+, K-, K0S. No title, no UrQMD label prefix."""
     data = load_urqmd_y_distributions(urqmd_dir / "y_distributions.csv")
 
     fig, ax = plt.subplots(figsize=(6.5, 5.0))
@@ -518,12 +467,10 @@ def make_pan_y_species(
         if sp not in data:
             continue
         yc, val, err = data[sp]
-        ax.errorbar(yc, val, yerr=err, label=SPECIES_LABEL.get(sp, sp),
-                    **STYLE.get(sp, dict(ls="-", lw=1.0, marker="o",
-                                         ms=4, mfc="white", mec="black", color="black")))
+        ax.errorbar(yc, val, yerr=err,
+                    label=SPECIES_LABEL.get(sp, sp),
+                    **STYLE.get(sp, {}))
 
-    if sys_def is not None:
-        ax.set_title(_title(sys_def, modified), fontsize=10)
     ax.set_xlabel(r"$y$")
     ax.set_ylabel(r"$dN/dy$")
     ax.xaxis.set_minor_locator(AutoMinorLocator())
@@ -539,10 +486,8 @@ def make_pan_y_species(
 def make_pan_pt_species(
     urqmd_dir: Path,
     outpath: Path,
-    sys_def: Optional[SystemDef] = None,
-    modified: bool = False,
 ) -> None:
-    """PAN-style dN/dpT (log scale) for K+, K-, K0S."""
+    """PAN-style dN/dpT (log) for K+, K-, K0S. No title."""
     data = load_urqmd_pt_spectra(urqmd_dir / "pt_spectra.csv")
 
     fig, ax = plt.subplots(figsize=(6.5, 5.0))
@@ -550,12 +495,10 @@ def make_pan_pt_species(
         if sp not in data:
             continue
         pt, val, err = data[sp]
-        ax.errorbar(pt, val, yerr=err, label=SPECIES_LABEL.get(sp, sp),
-                    **STYLE.get(sp, dict(ls="-", lw=1.0, marker="o",
-                                         ms=4, mfc="white", mec="black", color="black")))
+        ax.errorbar(pt, val, yerr=err,
+                    label=SPECIES_LABEL.get(sp, sp),
+                    **STYLE.get(sp, {}))
 
-    if sys_def is not None:
-        ax.set_title(_title(sys_def, modified), fontsize=10)
     ax.set_yscale("log")
     ax.set_xlabel(r"$p_T\;[\mathrm{GeV}/c]$")
     ax.set_ylabel(r"$dN/dp_T\;[(\mathrm{GeV}/c)^{-1}]$")
@@ -572,10 +515,8 @@ def make_pan_pt_species(
 def make_pan_ratio_y(
     urqmd_dir: Path,
     outpath: Path,
-    sys_def: Optional[SystemDef] = None,
-    modified: bool = False,
 ) -> None:
-    """PAN-style R_K(y) = 0.5*(K+ + K-) / K0S vs y."""
+    """PAN-style R_K(y) = 0.5*(K++K-)/K0S vs y. No title."""
     yc, Rk, Rk_e = load_urqmd_ratio_y(urqmd_dir / "ratio_y.csv")
 
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
@@ -585,8 +526,6 @@ def make_pan_ratio_y(
         ax.errorbar(yc[finite], Rk[finite], yerr=Rk_e[finite],
                     label=r"$R_K(y)$", **STYLE["ratio_y"])
 
-    if sys_def is not None:
-        ax.set_title(_title(sys_def, modified), fontsize=10)
     ax.set_xlabel(r"$y$")
     ax.set_ylabel(r"$R_K(y)$")
     ax.xaxis.set_minor_locator(AutoMinorLocator())
@@ -609,7 +548,6 @@ def process_system(
     outdir: Path,
     skip_missing_hep: bool = True,
 ) -> None:
-    """Generate all figures for one collision system."""
     unmod_dir = urqmd_base / sys_def.unmod_dir
     mod_dir   = urqmd_base / sys_def.mod_dir
 
@@ -623,8 +561,8 @@ def process_system(
     hep1b = hep_dir / sys_def.hep1b
     hep2a = hep_dir / sys_def.hep2a
     hep2b = hep_dir / sys_def.hep2b
-
     hep_ok = all(p.exists() for p in (hep1a, hep1b, hep2a, hep2b))
+
     if not hep_ok:
         for p in (hep1a, hep1b, hep2a, hep2b):
             if not p.exists():
@@ -636,32 +574,24 @@ def process_system(
 
     if hep_ok:
         print("  Fig 1 (rapidity overlays)...")
-        make_fig1(unmod_dir, hep1a, hep1b, sys_def.out(outdir, "fig1", mod=False),
-                  sys_def=sys_def, modified=False)
-        make_fig1(mod_dir,   hep1a, hep1b, sys_def.out(outdir, "fig1", mod=True),
-                  sys_def=sys_def, modified=True)
+        make_fig1(unmod_dir, hep1a, hep1b,
+                  sys_def.out(outdir, "fig1", mod=False), modified=False)
+        make_fig1(mod_dir,   hep1a, hep1b,
+                  sys_def.out(outdir, "fig1", mod=True),  modified=True)
 
         print("  Fig 2 (pT overlays + ratio)...")
-        make_fig2(unmod_dir, hep2a, hep2b, sys_def.out(outdir, "fig2", mod=False),
-                  sys_def=sys_def, modified=False, log_top=True)
-        make_fig2(mod_dir,   hep2a, hep2b, sys_def.out(outdir, "fig2", mod=True),
-                  sys_def=sys_def, modified=True, log_top=False)
+        make_fig2(unmod_dir, hep2a, hep2b,
+                  sys_def.out(outdir, "fig2", mod=False), modified=False, log_top=True)
+        make_fig2(mod_dir,   hep2a, hep2b,
+                  sys_def.out(outdir, "fig2", mod=True),  modified=True,  log_top=False)
 
     print("  PAN-style UrQMD-only figures...")
-    make_pan_y_species(unmod_dir, sys_def.out(outdir, "pan_y_species",  mod=False),
-                       sys_def=sys_def, modified=False)
-    make_pan_y_species(mod_dir,   sys_def.out(outdir, "pan_y_species",  mod=True),
-                       sys_def=sys_def, modified=True)
-
-    make_pan_pt_species(unmod_dir, sys_def.out(outdir, "pan_pt_species", mod=False),
-                        sys_def=sys_def, modified=False)
-    make_pan_pt_species(mod_dir,   sys_def.out(outdir, "pan_pt_species", mod=True),
-                        sys_def=sys_def, modified=True)
-
-    make_pan_ratio_y(unmod_dir, sys_def.out(outdir, "pan_ratio_y",    mod=False),
-                     sys_def=sys_def, modified=False)
-    make_pan_ratio_y(mod_dir,   sys_def.out(outdir, "pan_ratio_y",    mod=True),
-                     sys_def=sys_def, modified=True)
+    make_pan_y_species(unmod_dir,  sys_def.out(outdir, "pan_y_species",  mod=False))
+    make_pan_y_species(mod_dir,    sys_def.out(outdir, "pan_y_species",  mod=True))
+    make_pan_pt_species(unmod_dir, sys_def.out(outdir, "pan_pt_species", mod=False))
+    make_pan_pt_species(mod_dir,   sys_def.out(outdir, "pan_pt_species", mod=True))
+    make_pan_ratio_y(unmod_dir,    sys_def.out(outdir, "pan_ratio_y",    mod=False))
+    make_pan_ratio_y(mod_dir,      sys_def.out(outdir, "pan_ratio_y",    mod=True))
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -669,7 +599,7 @@ def process_system(
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
-        description="Generate PAN-like figures for kaon spectra (Ar+Sc, Xe+Xe, C+C, Xe+W)."
+        description="Generate PAN figures for kaon spectra (Ar+Sc, Xe+Xe, C+C, Xe+W)."
     )
     p.add_argument("--outdir",           default="pan_figures")
     p.add_argument("--hepdata-dir",      default="hep_data")
