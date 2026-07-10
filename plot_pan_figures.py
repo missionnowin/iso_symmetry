@@ -40,10 +40,11 @@ PAN journal style notes
 
 R(pT) bottom panel -- error note
 ---------------------------------
-NA61/SHINE R(pT) errors in the article are propagated fit-curve uncertainties
-(smooth Boltzmann fit band), NOT bin-by-bin point errors.
-UrQMD R(pT) uses raw bin-by-bin MC statistical errors.
-This difference is explicitly flagged in the bottom panel legend.
+NA61/SHINE R(pT) errors match the article Fig.2: they are derived from
+the ratio of two Boltzmann fits (one per species) with the uncertainty
+band obtained by propagating the fit-parameter covariance matrices
+analytically.  This produces a smooth shaded band, NOT discrete error bars.
+UrQMD R(pT) uses raw bin-by-bin MC statistical errors (line only).
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ import argparse
 import csv
 import math
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -61,6 +63,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
+
+try:
+    from scipy.optimize import curve_fit as _scipy_curve_fit
+    _SCIPY_OK = True
+except ImportError:
+    _SCIPY_OK = False
 
 # ---------------------------------------------------------------------------
 # Global style
@@ -315,6 +323,125 @@ def _urqmd_ratio_label(modified: bool) -> str:
     return base + r" (bin stat. err.)"
 
 # ---------------------------------------------------------------------------
+# Boltzmann fit helpers for R(pT) experimental band
+# ---------------------------------------------------------------------------
+
+# Kaon mass in GeV/c^2 (PDG average of K+/K- and K0S, ~493.7 MeV)
+_KAON_MASS = 0.4937
+
+
+def _boltzmann(pt: np.ndarray, A: float, T: float) -> np.ndarray:
+    """
+    Boltzmann pT spectrum (Eq. 4 in NA61/SHINE Nature Comm. 2025):
+        f(pT) = A * pT * exp( -sqrt(pT^2 + m_K^2) / T )
+    A  -- normalisation [same units as data]
+    T  -- inverse slope parameter [GeV/c]
+    """
+    return A * pt * np.exp(-np.sqrt(pt**2 + _KAON_MASS**2) / T)
+
+
+def _fit_boltzmann(
+    x: np.ndarray,
+    y: np.ndarray,
+    sigma: np.ndarray,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """
+    Fit _boltzmann to (x, y±sigma).  Returns (popt, pcov) or (None, None)
+    on failure.  Uses two initial guesses to improve convergence.
+    """
+    if not _SCIPY_OK or len(x) < 3:
+        return None, None
+
+    # estimate T from the point closest to pT = 0.5 GeV as a start
+    T0_guess = 0.20
+    A0_guess = float(np.max(y)) / (_boltzmann(np.array([0.3]), 1.0, T0_guess)[0])
+
+    for p0 in ([A0_guess, T0_guess], [A0_guess * 2, 0.15], [A0_guess * 0.5, 0.30]):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                popt, pcov = _scipy_curve_fit(
+                    _boltzmann, x, y,
+                    p0=p0,
+                    sigma=sigma,
+                    absolute_sigma=True,
+                    bounds=([0.0, 0.05], [1e6, 1.0]),
+                    maxfev=10000,
+                )
+            # sanity check: covariance must be finite and positive-definite
+            if np.all(np.isfinite(pcov)) and pcov[0, 0] > 0 and pcov[1, 1] > 0:
+                return popt, pcov
+        except Exception:
+            continue
+    return None, None
+
+
+def _ratio_band_from_fits(
+    hep2a_x: np.ndarray,
+    hep2a_y: np.ndarray,
+    hep2a_ep: np.ndarray,
+    hep2a_em: np.ndarray,
+    hep2b_x: np.ndarray,
+    hep2b_y: np.ndarray,
+    hep2b_ep: np.ndarray,
+    hep2b_em: np.ndarray,
+    pt_fine: np.ndarray,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """
+    Fit Boltzmann to K0S (hep2a) and (K++K-)/2 (hep2b) independently.
+    Return (R_fit, R_sigma) evaluated on pt_fine, or (None, None) if fits fail.
+
+    Analytical error propagation for R = f_kch / f_k0s:
+
+        partial R / partial A_kch  =  pT * exp(-E/T_kch) / f_k0s
+                                    =  R / A_kch
+        partial R / partial T_kch  =  R * E / T_kch^2          (E = sqrt(pT^2+m^2))
+        partial R / partial A_k0s  = -R / A_k0s
+        partial R / partial T_k0s  = -R * E / T_k0s^2
+
+    sigma_R^2 = (dR/dA_kch)^2 * Var(A_kch)
+              + (dR/dT_kch)^2 * Var(T_kch)
+              + 2*(dR/dA_kch)*(dR/dT_kch)*Cov(A_kch,T_kch)
+              + (dR/dA_k0s)^2 * Var(A_k0s)
+              + (dR/dT_k0s)^2 * Var(T_k0s)
+              + 2*(dR/dA_k0s)*(dR/dT_k0s)*Cov(A_k0s,T_k0s)
+    """
+    sig_k0s = 0.5 * (hep2a_ep + hep2a_em)
+    sig_kch = 0.5 * (hep2b_ep + hep2b_em)
+
+    popt_k0s, pcov_k0s = _fit_boltzmann(hep2a_x, hep2a_y, sig_k0s)
+    popt_kch, pcov_kch = _fit_boltzmann(hep2b_x, hep2b_y, sig_kch)
+
+    if popt_k0s is None or popt_kch is None:
+        return None, None
+
+    f_k0s = _boltzmann(pt_fine, *popt_k0s)
+    f_kch = _boltzmann(pt_fine, *popt_kch)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        R_fit = np.where(f_k0s > 0, f_kch / f_k0s, np.nan)
+
+    E = np.sqrt(pt_fine**2 + _KAON_MASS**2)   # transverse energy
+
+    # partial derivatives
+    dR_dA_kch  =  R_fit / popt_kch[0]
+    dR_dT_kch  =  R_fit * E / popt_kch[1]**2
+    dR_dA_k0s  = -R_fit / popt_k0s[0]
+    dR_dT_k0s  = -R_fit * E / popt_k0s[1]**2
+
+    var_R = (
+        dR_dA_kch**2 * pcov_kch[0, 0]
+        + dR_dT_kch**2 * pcov_kch[1, 1]
+        + 2 * dR_dA_kch * dR_dT_kch * pcov_kch[0, 1]
+        + dR_dA_k0s**2 * pcov_k0s[0, 0]
+        + dR_dT_k0s**2 * pcov_k0s[1, 1]
+        + 2 * dR_dA_k0s * dR_dT_k0s * pcov_k0s[0, 1]
+    )
+    R_sigma = np.where(var_R >= 0, np.sqrt(np.abs(var_R)), np.nan)
+
+    return R_fit, R_sigma
+
+# ---------------------------------------------------------------------------
 # rap_overlay -- dN/dy UrQMD vs NA61/SHINE
 # ---------------------------------------------------------------------------
 
@@ -370,9 +497,15 @@ def make_pt_overlay(
     Two-panel: dN/dpT linear scale (top) + R(pT) (bottom).
     Both unmodified and modified use linear top panel.
 
-    R(pT) legend distinguishes error types:
-      UrQMD  -> bin-by-bin MC statistical errors
-      NA61/SHINE -> propagated fit-curve uncertainties (Boltzmann fit band)
+    NA61/SHINE R(pT) band -- matches article Fig.2:
+      Each spectrum (K0S and (K++K-)/2) is fitted independently with a
+      Boltzmann function f(pT) = A*pT*exp(-sqrt(pT^2+m^2)/T).
+      The ratio R_fit = f_kch/f_k0s is shown as a smooth shaded band
+      whose width is obtained by propagating the fit-parameter covariance
+      matrices analytically.  Falls back to bin-by-bin error bars if
+      scipy is unavailable or either fit fails.
+
+    UrQMD R(pT) uses raw bin-by-bin MC statistical errors (line only).
     """
     pt_data = load_urqmd_pt_spectra(urqmd_dir / "pt_spectra.csv")
     pt_r, R_urqmd, _ = load_urqmd_ratio_pt(urqmd_dir / "ratio_pt.csv")
@@ -391,22 +524,40 @@ def make_pt_overlay(
     hep2a_x, hep2a_y, hep2a_ep, hep2a_em = load_hepdata(hep2a)
     hep2b_x, hep2b_y, hep2b_ep, hep2b_em = load_hepdata(hep2b)
 
-    kch_on_k0s = np.interp(hep2a_x, hep2b_x, hep2b_y)
-    kch_ep_i   = np.interp(hep2a_x, hep2b_x, hep2b_ep)
-    kch_em_i   = np.interp(hep2a_x, hep2b_x, hep2b_em)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        R_exp = np.where(hep2a_y > 0, kch_on_k0s / hep2a_y, np.nan)
-        R_exp_err = np.abs(R_exp) * np.sqrt(
-            ((0.5*(kch_ep_i + kch_em_i)) / np.where(kch_on_k0s > 0, kch_on_k0s, 1.0))**2 +
-            ((0.5*(hep2a_ep + hep2a_em)) / np.where(hep2a_y > 0, hep2a_y, 1.0))**2
-        )
+    # --- Build R(pT) experimental band via Boltzmann fits -------------------
+    # Dense pT grid covering the measured range
+    pt_lo = max(min(hep2a_x.min(), hep2b_x.min()) - 0.05, 0.0)
+    pt_hi = max(hep2a_x.max(), hep2b_x.max()) + 0.1
+    pt_fine = np.linspace(pt_lo, pt_hi, 300)
 
+    R_fit, R_sigma = _ratio_band_from_fits(
+        hep2a_x, hep2a_y, hep2a_ep, hep2a_em,
+        hep2b_x, hep2b_y, hep2b_ep, hep2b_em,
+        pt_fine,
+    )
+
+    # Fallback: bin-by-bin propagation (used only if fits fail)
+    use_fit_band = (R_fit is not None)
+    if not use_fit_band:
+        print("  [warn] Boltzmann fit failed -- falling back to bin-by-bin R(pT) errors")
+        kch_on_k0s = np.interp(hep2a_x, hep2b_x, hep2b_y)
+        kch_ep_i   = np.interp(hep2a_x, hep2b_x, hep2b_ep)
+        kch_em_i   = np.interp(hep2a_x, hep2b_x, hep2b_em)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            R_exp_fb = np.where(hep2a_y > 0, kch_on_k0s / hep2a_y, np.nan)
+            R_exp_err_fb = np.abs(R_exp_fb) * np.sqrt(
+                ((0.5*(kch_ep_i + kch_em_i)) / np.where(kch_on_k0s > 0, kch_on_k0s, 1.0))**2 +
+                ((0.5*(hep2a_ep + hep2a_em)) / np.where(hep2a_y > 0, hep2a_y, 1.0))**2
+            )
+
+    # --- Figure layout -------------------------------------------------------
     fig, (ax_top, ax_bot) = plt.subplots(
         2, 1, figsize=(6.5, 7.5),
         gridspec_kw={"height_ratios": [2.5, 1], "hspace": 0.05},
         sharex=True,
     )
 
+    # Top panel: dN/dpT spectra
     if len(k0s_val) > 0:
         ax_top.plot(k0s_pt, k0s_val,
                     label=_urqmd_overlay_label(r"$K^0_S$", modified),
@@ -420,24 +571,43 @@ def make_pt_overlay(
     ax_top.errorbar(hep2b_x, hep2b_y, yerr=[hep2b_em, hep2b_ep],
                     label=r"NA61/SHINE $(K^+ {+} K^-)/2$", **STYLE["exp_kch"])
 
-    # Always linear -- log was removed for both unmod and mod
     ax_top.yaxis.set_minor_locator(AutoMinorLocator())
     ax_top.set_ylabel(r"$dN/dp_T\;[(\mathrm{GeV}/c)^{-1}]$")
     ax_top.legend(loc="upper right")
     ax_top.tick_params(labelbottom=False)
 
-    finite_u = np.isfinite(R_urqmd)
-    finite_e = np.isfinite(R_exp)
+    # Bottom panel: R(pT)
     ax_bot.axhline(1.0, ls=":", lw=0.9, color="black")
+
+    # UrQMD ratio -- unchanged (bin-by-bin stat errors, shown as a line)
+    finite_u = np.isfinite(R_urqmd)
     if finite_u.any():
         ax_bot.plot(pt_r[finite_u], R_urqmd[finite_u],
                     label=_urqmd_ratio_label(modified),
                     **STYLE["ratio_urqmd"])
-    if finite_e.any():
-        ax_bot.errorbar(hep2a_x[finite_e], R_exp[finite_e],
-                        yerr=R_exp_err[finite_e],
-                        label=r"NA61/SHINE (fit curve err.)",
-                        **STYLE["ratio_exp"])
+
+    # NA61/SHINE ratio
+    if use_fit_band:
+        # Smooth shaded band from Boltzmann fit parameter propagation
+        finite_b = np.isfinite(R_fit) & np.isfinite(R_sigma)
+        if finite_b.any():
+            ax_bot.fill_between(
+                pt_fine[finite_b],
+                (R_fit - R_sigma)[finite_b],
+                (R_fit + R_sigma)[finite_b],
+                alpha=0.35, color="black",
+                label=r"NA61/SHINE (Boltzmann fit band)",
+            )
+            ax_bot.plot(pt_fine[finite_b], R_fit[finite_b],
+                        ls="-", lw=1.2, color="black")
+    else:
+        # Fallback: discrete error bars
+        finite_e = np.isfinite(R_exp_fb)
+        if finite_e.any():
+            ax_bot.errorbar(hep2a_x[finite_e], R_exp_fb[finite_e],
+                            yerr=R_exp_err_fb[finite_e],
+                            label=r"NA61/SHINE (bin-by-bin err.)",
+                            **STYLE["ratio_exp"])
 
     ax_bot.set_xlabel(r"$p_T\;[\mathrm{GeV}/c]$")
     ax_bot.set_ylabel(r"$R(p_T)$")
