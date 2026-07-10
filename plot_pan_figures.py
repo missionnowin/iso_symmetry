@@ -17,7 +17,7 @@ Figure1a/b  ->  dn/dy          (per-event average rapidity spectra)
 Figure2a/b  ->  dn/dpT         (per-event average transverse-momentum spectra)
 Figure7     ->  d2n/dy dpT     (per-event average 2D K0S spectrum)
 
-This means the dn_rap_overlay_fig1 / dn_pt_overlay_fig2 plots compare
+This means the dn_rap_overlay / dn_pt_overlay plots compare
 UrQMD dn directly against the experimental data with NO rescaling.
 The rap_overlay / pt_overlay plots still use UrQMD dN; the unit
 mismatch (dN vs dn) is noted in the axis labels and must be
@@ -38,8 +38,8 @@ Outputs per system (all as .eps + .png), e.g. for Ar+Sc:
   ArSc_11p9GeV_pan_dn_pt_species_mod.{eps,png}
   ArSc_11p9GeV_pan_ratio_y_unmod.{eps,png}
   ArSc_11p9GeV_pan_ratio_y_mod.{eps,png}
-  ArSc_11p9GeV_dn_rap_overlay_fig1.{eps,png}      -- UrQMD dn/dy (unmod+mod) vs NA61/SHINE dn/dy
-  ArSc_11p9GeV_dn_pt_overlay_fig2.{eps,png}       -- UrQMD dn/dpT (unmod+mod, linear+R) vs dn/dpT
+  ArSc_11p9GeV_dn_rap_overlay.{eps,png}           -- UrQMD dn/dy (unmod+mod) vs NA61/SHINE dn/dy
+  ArSc_11p9GeV_dn_pt_overlay.{eps,png}            -- UrQMD dn/dpT (unmod+mod, linear+R) vs dn/dpT
   ArSc_11p9GeV_k0s_2d_combined_overlay.{eps,png}  -- K0S d2n/dydpT vs exp
 
 NOTE: energy_str uses 'p' instead of '.' (e.g. 11p9GeV) to avoid
@@ -48,8 +48,8 @@ Windows treating the decimal as a file extension separator.
 PAN journal style notes
 -----------------------
 * No in-plot titles -- system/energy/variant info goes in the LaTeX caption.
-* UrQMD vs UrQMD(3:1) labels appear only in overlay figs (dn_rap_overlay_fig1
-  and dn_pt_overlay_fig2) where both UrQMD variants are shown together.
+* UrQMD vs UrQMD(3:1) labels appear only in overlay figs (dn_rap_overlay
+  and dn_pt_overlay) where both UrQMD variants are shown together.
 * The rap_overlay / pt_overlay functions show a single UrQMD variant each.
 * PAN-only UrQMD plots show only species labels (K+, K-, K0S).
 * Grayscale / black-and-white only.
@@ -316,7 +316,7 @@ def load_urqmd_pt_spectra(path: Path) -> Dict[str, Tuple[np.ndarray, np.ndarray,
 
 
 # Column layout is identical for dN and dn CSVs.
-load_urqmd_dn_pt_spectra    = load_urqmd_pt_spectra
+load_urqmd_dn_pt_spectra      = load_urqmd_pt_spectra
 load_urqmd_dn_y_distributions = load_urqmd_y_distributions
 
 
@@ -829,11 +829,11 @@ def make_pan_ratio_y(urqmd_dir: Path, outpath: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# dn/dy overlay vs NA61/SHINE Figure1
-# Both UrQMD dn and NA61/SHINE dn are in the same units -- no rescaling.
+# dn_rap_overlay -- UrQMD dn/dy (unmod+mod) vs NA61/SHINE dn/dy
+# Both sides are dn -- no rescaling needed.
 # ---------------------------------------------------------------------------
 
-def make_dn_rap_overlay_fig1(
+def make_dn_rap_overlay(
     unmod_dir: Path,
     mod_dir: Path,
     hep1a: Path,
@@ -842,15 +842,15 @@ def make_dn_rap_overlay_fig1(
 ) -> None:
     """
     Single panel: UrQMD dn/dy (unmod solid, mod dashed) vs NA61/SHINE dn/dy.
-    HEPdata Figure1 is confirmed as dn/dy (per HEPdata keyword: dn/dy),
+    HEPdata Figure1a/b are confirmed dn/dy (per HEPdata keyword header),
     so UrQMD dn/dy from y_distributions_dn.csv is plotted directly against
-    it without any rescaling.
+    them without any rescaling.
     """
     csv_unmod = unmod_dir / "y_distributions_dn.csv"
     csv_mod   = mod_dir   / "y_distributions_dn.csv"
     for p in (csv_unmod, csv_mod):
         if not p.exists():
-            print(f"  [warn] {p} not found -- skipping dn/dy overlay fig1")
+            print(f"  [warn] {p} not found -- skipping dn_rap_overlay")
             return
 
     data_u = load_urqmd_dn_y_distributions(csv_unmod)
@@ -860,7 +860,6 @@ def make_dn_rap_overlay_fig1(
 
     fig, ax = plt.subplots(figsize=(6.5, 5.0))
 
-    # UrQMD K0S unmod / mod
     if "K0S" in data_u:
         yc, val, err = data_u["K0S"]
         ax.errorbar(yc, val, yerr=err, label=r"UrQMD $K^0_S$",
@@ -874,7 +873,6 @@ def make_dn_rap_overlay_fig1(
                     mfc="black", mec="black", color="black",
                     capsize=2, elinewidth=0.7)
 
-    # UrQMD (K++K-)/2 unmod / mod
     for data, ls, mfc, prefix in (
         (data_u, "-",  "white", "UrQMD"),
         (data_m, "--", "black", "UrQMD(3:1)"),
@@ -891,7 +889,6 @@ def make_dn_rap_overlay_fig1(
                             mfc=mfc, mec="black", color="black",
                             capsize=2, elinewidth=0.7)
 
-    # NA61/SHINE dn/dy -- no rescaling needed
     ax.errorbar(hy_k0s_x, hy_k0s_y, yerr=[hy_k0s_em, hy_k0s_ep],
                 label=r"NA61/SHINE $K^0_S$", **STYLE["exp_k0s"])
     ax.errorbar(hy_kch_x, hy_kch_y, yerr=[hy_kch_em, hy_kch_ep],
@@ -909,11 +906,11 @@ def make_dn_rap_overlay_fig1(
 
 
 # ---------------------------------------------------------------------------
-# dn/dpT overlay vs NA61/SHINE Figure2
-# Both UrQMD dn and NA61/SHINE dn are in the same units -- no rescaling.
+# dn_pt_overlay -- UrQMD dn/dpT (unmod+mod) vs NA61/SHINE dn/dpT
+# Both sides are dn -- no rescaling needed.
 # ---------------------------------------------------------------------------
 
-def make_dn_pt_overlay_fig2(
+def make_dn_pt_overlay(
     unmod_dir: Path,
     mod_dir: Path,
     hep2a: Path,
@@ -922,8 +919,8 @@ def make_dn_pt_overlay_fig2(
 ) -> None:
     """
     Two-panel: UrQMD dn/dpT linear (top) + R(pT) (bottom) vs NA61/SHINE dn/dpT.
-    HEPdata Figure2 is confirmed as dn/dpT (per HEPdata keyword: dn/dp_T),
-    so UrQMD dn from pt_spectra_dn.csv is plotted directly against it
+    HEPdata Figure2a/b are confirmed dn/dpT (per HEPdata keyword header),
+    so UrQMD dn from pt_spectra_dn.csv is plotted directly against them
     without any rescaling.  Both unmod and mod UrQMD variants are overlaid.
     R(pT) is dimensionless -- directly comparable across units.
     """
@@ -931,7 +928,7 @@ def make_dn_pt_overlay_fig2(
     csv_mod_pt   = mod_dir   / "pt_spectra_dn.csv"
     for p in (csv_unmod_pt, csv_mod_pt):
         if not p.exists():
-            print(f"  [warn] {p} not found -- skipping dn/dpT overlay fig2")
+            print(f"  [warn] {p} not found -- skipping dn_pt_overlay")
             return
 
     data_u = load_urqmd_dn_pt_spectra(csv_unmod_pt)
@@ -961,7 +958,6 @@ def make_dn_pt_overlay_fig2(
     pt_r_u, R_u = _ratio_dn(kch_u, k0s_u)
     pt_r_m, R_m = _ratio_dn(kch_m, k0s_m)
 
-    # NA61/SHINE dn/dpT -- loaded as-is, no rescaling
     hep2a_x, hep2a_y, hep2a_ep, hep2a_em = load_hepdata(hep2a)
     hep2b_x, hep2b_y, hep2b_ep, hep2b_em = load_hepdata(hep2b)
 
@@ -971,7 +967,6 @@ def make_dn_pt_overlay_fig2(
         sharex=True,
     )
 
-    # Top panel: dn/dpT
     if len(k0s_u[1]) > 0:
         ax_top.plot(k0s_u[0], k0s_u[1], label=r"UrQMD $K^0_S$",
                     **STYLE["urqmd_k0s"])
@@ -994,7 +989,6 @@ def make_dn_pt_overlay_fig2(
     ax_top.legend(loc="upper right", fontsize=8)
     ax_top.tick_params(labelbottom=False)
 
-    # Bottom panel: R(pT)
     ax_bot.axhline(1.0, ls=":", lw=0.9, color="black")
     finite_u = np.isfinite(R_u)
     if finite_u.any():
@@ -1137,7 +1131,6 @@ def process_system(
     print(f"\n=== {sys_def.label} @ {sys_def.energy_str} ===")
 
     if hep_ok:
-        # Unit note: UrQMD dN vs NA61/SHINE dn -- see make_rap_overlay docstring
         print("  Rapidity overlay (UrQMD dN/dy vs NA61/SHINE dn/dy)...")
         make_rap_overlay(unmod_dir, hep1a, hep1b,
                          sys_def.out(outdir, "rap_overlay", mod=False), modified=False)
@@ -1167,15 +1160,15 @@ def process_system(
     make_pan_ratio_y(mod_dir,   sys_def.out(outdir, "pan_ratio_y", mod=True))
 
     if hep_ok:
-        print("  dn/dy overlay vs NA61/SHINE Figure1 (dn, unmod+mod UrQMD)...")
-        make_dn_rap_overlay_fig1(
+        print("  dn/dy overlay (dn, unmod+mod UrQMD vs NA61/SHINE)...")
+        make_dn_rap_overlay(
             unmod_dir, mod_dir, hep1a, hep1b,
-            sys_def.out(outdir, "dn_rap_overlay_fig1"),
+            sys_def.out(outdir, "dn_rap_overlay"),
         )
-        print("  dn/dpT overlay vs NA61/SHINE Figure2 (dn, unmod+mod UrQMD, linear+R)...")
-        make_dn_pt_overlay_fig2(
+        print("  dn/dpT overlay (dn, unmod+mod UrQMD vs NA61/SHINE, linear+R)...")
+        make_dn_pt_overlay(
             unmod_dir, mod_dir, hep2a, hep2b,
-            sys_def.out(outdir, "dn_pt_overlay_fig2"),
+            sys_def.out(outdir, "dn_pt_overlay"),
         )
 
     if hep7 is not None and hep7.exists():
