@@ -606,7 +606,7 @@ def make_rap_overlay(
                 label=r"NA61/SHINE $(K^+ {+} K^-)/2$ ($dn/dy$)", **STYLE["exp_kch"])
 
     ax.set_xlabel(r"$y$")
-    ax.set_ylabel(r"$dN/dy$ (UrQMD) / $dn/dy$ (NA61)")
+    ax.set_ylabel(r"$dN/dy$")
     ax.xaxis.set_minor_locator(AutoMinorLocator())
     ax.yaxis.set_minor_locator(AutoMinorLocator())
     ax.legend(loc="upper right")
@@ -668,7 +668,7 @@ def make_pt_overlay(
                     label=r"NA61/SHINE $(K^+ {+} K^-)/2$ ($dn/dp_T$)", **STYLE["exp_kch"])
 
     ax_top.yaxis.set_minor_locator(AutoMinorLocator())
-    ax_top.set_ylabel(r"$dN/dp_T$ (UrQMD) / $dn/dp_T$ (NA61) $[(\mathrm{GeV}/c)^{-1}]$")
+    ax_top.set_ylabel(r"$dN/dp_T$ $[(\mathrm{GeV}/c)^{-1}]$")
     ax_top.legend(loc="upper right", fontsize=8)
     ax_top.tick_params(labelbottom=False)
 
