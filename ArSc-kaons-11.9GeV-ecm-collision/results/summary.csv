@@ -9,8 +9,8 @@ collision_mode,collider
 analysis_frame,cm
 ecm_snn_gev,11.9
 beam_kinetic_agev,
-collision_system,Ar40+Sc45
-beam_label,"s_NN = 11.9 GeV, collider mode, unmodified"
+collision_system,Ar+Sc
+beam_label,"sqrt(s_NN) = 11.9 GeV, collision, unmodified"
 k0_mode,strong
 k0s_codes,"(311, -311)"
 neutral_scale_for_K0S,0.5

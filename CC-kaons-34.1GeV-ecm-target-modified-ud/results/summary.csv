@@ -9,7 +9,7 @@ collision_mode,fixed-target
 analysis_frame,cm
 ecm_snn_gev,34.1
 beam_kinetic_agev,
-collision_system,C12+C12
+collision_system,C+C
 beam_label,"sqrt(s_NN) = 34.1 GeV, target, modified"
 k0_mode,strong
 k0s_codes,"(311, -311)"
