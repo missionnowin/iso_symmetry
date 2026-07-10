@@ -497,15 +497,10 @@ def make_pt_overlay(
     Two-panel: dN/dpT linear scale (top) + R(pT) (bottom).
     Both unmodified and modified use linear top panel.
 
-    NA61/SHINE R(pT) band -- matches article Fig.2:
-      Each spectrum (K0S and (K++K-)/2) is fitted independently with a
-      Boltzmann function f(pT) = A*pT*exp(-sqrt(pT^2+m^2)/T).
-      The ratio R_fit = f_kch/f_k0s is shown as a smooth shaded band
-      whose width is obtained by propagating the fit-parameter covariance
-      matrices analytically.  Falls back to bin-by-bin error bars if
-      scipy is unavailable or either fit fails.
-
-    UrQMD R(pT) uses raw bin-by-bin MC statistical errors (line only).
+    NA61/SHINE R(pT) is shown as a smooth shaded band derived from
+    independent Boltzmann fits to each spectrum, propagated analytically.
+    Falls back to bin-by-bin error bars if scipy is unavailable or a fit
+    fails. UrQMD R(pT) uses raw bin-by-bin MC statistical errors (line only).
     """
     pt_data = load_urqmd_pt_spectra(urqmd_dir / "pt_spectra.csv")
     pt_r, R_urqmd, _ = load_urqmd_ratio_pt(urqmd_dir / "ratio_pt.csv")
@@ -525,7 +520,6 @@ def make_pt_overlay(
     hep2b_x, hep2b_y, hep2b_ep, hep2b_em = load_hepdata(hep2b)
 
     # --- Build R(pT) experimental band via Boltzmann fits -------------------
-    # Dense pT grid covering the measured range
     pt_lo = max(min(hep2a_x.min(), hep2b_x.min()) - 0.05, 0.0)
     pt_hi = max(hep2a_x.max(), hep2b_x.max()) + 0.1
     pt_fine = np.linspace(pt_lo, pt_hi, 300)
@@ -536,7 +530,6 @@ def make_pt_overlay(
         pt_fine,
     )
 
-    # Fallback: bin-by-bin propagation (used only if fits fail)
     use_fit_band = (R_fit is not None)
     if not use_fit_band:
         print("  [warn] Boltzmann fit failed -- falling back to bin-by-bin R(pT) errors")
@@ -579,16 +572,15 @@ def make_pt_overlay(
     # Bottom panel: R(pT)
     ax_bot.axhline(1.0, ls=":", lw=0.9, color="black")
 
-    # UrQMD ratio -- unchanged (bin-by-bin stat errors, shown as a line)
+    # UrQMD ratio -- bin-by-bin stat errors, shown as a line
     finite_u = np.isfinite(R_urqmd)
     if finite_u.any():
         ax_bot.plot(pt_r[finite_u], R_urqmd[finite_u],
                     label=_urqmd_ratio_label(modified),
                     **STYLE["ratio_urqmd"])
 
-    # NA61/SHINE ratio
+    # NA61/SHINE ratio -- shaded band only, plain label, no center line
     if use_fit_band:
-        # Smooth shaded band from Boltzmann fit parameter propagation
         finite_b = np.isfinite(R_fit) & np.isfinite(R_sigma)
         if finite_b.any():
             ax_bot.fill_between(
@@ -596,17 +588,15 @@ def make_pt_overlay(
                 (R_fit - R_sigma)[finite_b],
                 (R_fit + R_sigma)[finite_b],
                 alpha=0.35, color="black",
-                label=r"NA61/SHINE (Boltzmann fit band)",
+                label=r"NA61/SHINE",
             )
-            ax_bot.plot(pt_fine[finite_b], R_fit[finite_b],
-                        ls="-", lw=1.2, color="black")
+            # (no center line -- it was the spurious second black curve)
     else:
-        # Fallback: discrete error bars
         finite_e = np.isfinite(R_exp_fb)
         if finite_e.any():
             ax_bot.errorbar(hep2a_x[finite_e], R_exp_fb[finite_e],
                             yerr=R_exp_err_fb[finite_e],
-                            label=r"NA61/SHINE (bin-by-bin err.)",
+                            label=r"NA61/SHINE",
                             **STYLE["ratio_exp"])
 
     ax_bot.set_xlabel(r"$p_T\;[\mathrm{GeV}/c]$")
