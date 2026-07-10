@@ -660,14 +660,15 @@ def make_pan_pt_species(urqmd_dir: Path, outpath: Path) -> None:
 
 
 def make_pan_ratio_y(urqmd_dir: Path, outpath: Path) -> None:
-    """PAN-style R_K(y) = 0.5*(K++K-)/K0S vs y. No title."""
-    yc, Rk, Rk_e = load_urqmd_ratio_y(urqmd_dir / "ratio_y.csv")
+    """PAN-style R_K(y) = 0.5*(K++K-)/K0S vs y. No title. No error bars."""
+    yc, Rk, _Rk_e = load_urqmd_ratio_y(urqmd_dir / "ratio_y.csv")
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
     finite = np.isfinite(Rk)
     ax.axhline(1.0, ls=":", lw=0.9, color="black")
     if finite.any():
-        ax.errorbar(yc[finite], Rk[finite], yerr=Rk_e[finite],
-                    label=r"$R_K(y)$", **STYLE["ratio_y"])
+        style = dict(STYLE["ratio_y"])
+        ax.plot(yc[finite], Rk[finite],
+                label=r"$R_K(y)$", **style)
     ax.set_xlabel(r"$y$")
     ax.set_ylabel(r"$R_K(y)$")
     ax.xaxis.set_minor_locator(AutoMinorLocator())
