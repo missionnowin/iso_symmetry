@@ -40,13 +40,21 @@ Outputs
 -------
 In --outdir:
 
-  pt_spectra.csv / .png                 (K+, K-, K0_S; three species)
-  y_distributions.csv / .png            (K+, K-, K0_S; three species)
-  y_distributions_meancharged.csv/.png  (NEW: (K+ + K-)/2 vs 2*K0_S)
+  pt_spectra.csv / .png                 (K+, K-, K0_S; dN/dpT total)
+  pt_spectra_dn.csv / .png              (K+, K-, K0_S; dn/dpT per-event)
+  y_distributions.csv / .png            (K+, K-, K0_S; dN/dy total)
+  y_distributions_dn.csv / .png         (K+, K-, K0_S; dn/dy per-event)
+  y_distributions_meancharged.csv/.png  ((K+ + K-)/2 vs 2*K0_S)
   ratio_pt.csv / .png
-  ratio_y.csv / .png                    (NEW: R_K(y) isospin ratio vs rapidity)
+  ratio_y.csv / .png                    (R_K(y) isospin ratio vs rapidity)
   mean_kaon_y.csv / .png                (K+, K-, K0_S, (K+ + K-)/2 combined)
   summary.csv
+
+Notation note
+-------------
+dN/dpT  -- total yield summed over all N_ev events, divided by bin width
+dn/dpT  -- per-event yield: (1/N_ev) * dN/dpT
+Same distinction applies to dN/dy vs dn/dy.
 """
 
 from __future__ import annotations
@@ -599,7 +607,7 @@ def _add_plot_info(ax, res: dict, loc: str = "lower left") -> None:
 
 
 # ---------------------------------------------------------------------------
-# pT spectra (K+, K-, K0S) 
+# pT spectra -- dN/dpT (total, existing behaviour)
 # ---------------------------------------------------------------------------
 
 
@@ -641,7 +649,70 @@ def save_pt_spectra(outdir: Path, res: dict, normalize: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# y distributions  --  PLOT #1 : K+, K-, K0_S (three species, as before)
+# pT spectra -- dn/dpT  (per-event, NEW)
+# ---------------------------------------------------------------------------
+
+
+def save_pt_spectra_dn(outdir: Path, res: dict) -> None:
+    """Write pt_spectra_dn.csv and pt_spectra_dn.png with per-event dn/dpT.
+
+    dn/dpT = (1/N_ev) * dN/dpT
+           = counts / (N_ev * delta_pT)
+
+    The CSV columns are identical to pt_spectra.csv but 'value' and 'error'
+    now hold dn/dpT and its statistical uncertainty instead of dN/dpT.
+    A header comment line records N_ev so the normalisation is unambiguous.
+    """
+    edges = res["pt_edges"]
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    widths = np.diff(edges)
+    nev = max(res["n_events"], 1)
+
+    rows = []
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    for name in ("Kplus", "Kminus", "K0S"):
+        raw = res["pt_counts"][name].astype(float)
+        scale = res.get("neutral_scale", 1.0) if name == "K0S" else 1.0
+        counts = scale * raw
+        err_counts = scale * np.sqrt(np.maximum(raw, 0.0))
+        # per-event normalisation
+        dn = counts / (nev * widths)
+        dn_err = err_counts / (nev * widths)
+        ax.errorbar(centers, dn, yerr=dn_err, marker="o", ms=4, lw=1.2, capsize=2, label=_label(name))
+        for i, ctr in enumerate(centers):
+            rows.append([
+                name,
+                f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}",
+                f"{counts[i]:.6e}",
+                f"{dn[i]:.6e}",
+                f"{dn_err[i]:.6e}",
+            ])
+
+    y_label = _analysis_y_label(res)
+    ax.set_xlabel(r"$p_T$ [GeV/c]")
+    ax.set_ylabel(r"$dn/dp_T$ [(GeV/c)$^{-1}$]")
+    ax.set_yscale("log")
+    ax.set_title(f"Kaon $p_T$ spectra (per event), $|{y_label}|<{res['ycut']:.2f}$")
+    _add_plot_info(ax, res, loc="lower left")
+    ax.legend()
+    ax.grid(True, which="both", ls=":", alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(outdir / "pt_spectra_dn.png", dpi=140)
+    plt.close(fig)
+
+    # write CSV with a leading comment so the normalisation is self-documenting
+    csv_path = outdir / "pt_spectra_dn.csv"
+    with open(csv_path, "w", newline="") as f:
+        f.write(f"# dn/dpT per-event spectrum; N_ev={nev}\n")
+        writer = csv.writer(f)
+        writer.writerow(["species", "pt_lo", "pt_hi", "pt_center", "counts", "dn_dpt", "dn_dpt_err"])
+        for row in rows:
+            writer.writerow(row)
+
+
+# ---------------------------------------------------------------------------
+# y distributions  --  dN/dy (total, existing behaviour)
 # ---------------------------------------------------------------------------
 
 
@@ -689,7 +760,68 @@ def save_y_distributions(outdir: Path, res: dict, normalize: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# y distributions  --  PLOT #2 : (K+ + K-)/2  vs  2 * K0_S   (NEW)
+# y distributions -- dn/dy  (per-event, NEW)
+# ---------------------------------------------------------------------------
+
+
+def save_y_distributions_dn(outdir: Path, res: dict) -> None:
+    """Write y_distributions_dn.csv and y_distributions_dn.png with per-event dn/dy.
+
+    dn/dy = (1/N_ev) * dN/dy
+          = counts / (N_ev * delta_y)
+
+    A header comment line records N_ev so the normalisation is unambiguous.
+    """
+    edges = res["y_edges"]
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    widths = np.diff(edges)
+    nev = max(res["n_events"], 1)
+
+    rows = []
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    for name in ("Kplus", "Kminus", "K0S"):
+        raw = res["y_counts"][name].astype(float)
+        scale = res.get("neutral_scale", 1.0) if name == "K0S" else 1.0
+        counts = scale * raw
+        err_counts = scale * np.sqrt(np.maximum(raw, 0.0))
+        # per-event normalisation
+        dn = counts / (nev * widths)
+        dn_err = err_counts / (nev * widths)
+        ax.errorbar(centers, dn, yerr=dn_err, marker="s", ms=4, lw=1.2, capsize=2, label=_label(name))
+        for i, ctr in enumerate(centers):
+            rows.append([
+                name,
+                f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}",
+                f"{counts[i]:.6e}",
+                f"{dn[i]:.6e}",
+                f"{dn_err[i]:.6e}",
+            ])
+
+    y_label = _analysis_y_label(res)
+    ax.axvspan(-res["ycut"], res["ycut"], color="grey", alpha=0.10,
+               label=rf"central window $\pm${res['ycut']:.2f}")
+    ax.set_xlabel(y_label)
+    ax.set_ylabel(r"$dn/dy$")
+    ax.set_title(r"Kaon rapidity distributions (per event): $K^+$, $K^-$, $K^0_S$")
+    _add_plot_info(ax, res, loc="upper left")
+    ax.legend()
+    ax.grid(True, ls=":", alpha=0.5)
+    fig.tight_layout()
+    fig.savefig(outdir / "y_distributions_dn.png", dpi=140)
+    plt.close(fig)
+
+    csv_path = outdir / "y_distributions_dn.csv"
+    with open(csv_path, "w", newline="") as f:
+        f.write(f"# dn/dy per-event spectrum; N_ev={nev}\n")
+        writer = csv.writer(f)
+        writer.writerow(["species", "y_lo", "y_hi", "y_center", "counts", "dn_dy", "dn_dy_err"])
+        for row in rows:
+            writer.writerow(row)
+
+
+# ---------------------------------------------------------------------------
+# y distributions  --  (K+ + K-)/2  vs  2 * K0_S   (unchanged)
 # ---------------------------------------------------------------------------
 
 
@@ -994,12 +1126,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f" in |y_analysis|<{args.ycut}: K+={res['yield_in_window']['Kplus']} K-={res['yield_in_window']['Kminus']} K0S_equiv={k0s_window:g}")
     normalize = not args.no_normalize
     save_pt_spectra(outdir, res, normalize=normalize)
+    save_pt_spectra_dn(outdir, res)
     save_y_distributions(outdir, res, normalize=normalize)
+    save_y_distributions_dn(outdir, res)
     save_y_distributions_meancharged(outdir, res, normalize=normalize)
     save_ratio(outdir, res)
     save_ratio_y(outdir, res)
     save_summary(outdir, res)
-    print(" wrote: pt_spectra.{csv,png}, y_distributions.{csv,png}, y_distributions_meancharged.{csv,png}, ratio_pt.{csv,png}, ratio_y.{csv,png}, mean_kaon_y.{csv,png}, summary.csv")
+    print(" wrote: pt_spectra.{csv,png}, pt_spectra_dn.{csv,png}, y_distributions.{csv,png}, y_distributions_dn.{csv,png}, y_distributions_meancharged.{csv,png}, ratio_pt.{csv,png}, ratio_y.{csv,png}, summary.csv")
     return 0
 
 
