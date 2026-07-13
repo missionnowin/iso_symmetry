@@ -36,6 +36,31 @@ Key frame convention
 --------------------
 y_analysis = y_input - y_cm_in_input_frame
 
+Wounded-nucleon (N_part) estimation
+------------------------------------
+UrQMD f19 / OSCAR output does NOT carry a per-particle collision counter
+(ncoll), so N_part cannot be read directly.  Instead, spectator nucleons are
+identified kinematically and subtracted from the total nucleon count:
+
+    N_part = A_proj + A_targ - N_spec
+
+A nucleon (PDG ±2212 or ±2112) is classified as a spectator when ALL of the
+following hold in the *input* (lab / target) frame:
+
+  1. |y - y_ref| < y_tol        -- rapidity close to beam or target rest value
+  2. pT < pt_spec_max            -- small transverse kick
+
+For fixed-target input:
+  * projectile spectators: y_ref = 2 * y_cm  (beam rapidity in target frame)
+  * target spectators:     y_ref = 0          (target at rest)
+
+For collider input (symmetric):
+  * forward spectators:  y_ref = +y_beam_cm
+  * backward spectators: y_ref = -y_beam_cm
+
+Tune --y-spec-tol and --pt-spec-max if your system / energy requires it.
+The result is stored as mean_Npart and mean_Nspec in summary.csv.
+
 Outputs
 -------
 In --outdir:
@@ -82,6 +107,9 @@ PDG_KMINUS = -321
 PDG_K0S = 310
 PDG_K0 = 311
 PDG_K0BAR = -311
+
+# PDG codes for nucleons (proton / neutron, particle + antiparticle)
+PDG_NUCLEONS = frozenset([2212, -2212, 2112, -2112])
 
 CHARGED_ACTIVITY_PDGS = {
     11, -11, 13, -13, 15, -15,
@@ -346,6 +374,112 @@ def resolve_y_shift(args: argparse.Namespace) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Wounded-nucleon (N_part) estimation from f19 spectator subtraction
+# ---------------------------------------------------------------------------
+
+def count_spectators(
+    particles: List[Particle],
+    y_proj: float,
+    y_targ: float,
+    y_tol: float = 0.5,
+    pt_max: float = 0.2,
+) -> int:
+    """Count spectator-like nucleons in a single event.
+
+    A nucleon (PDG ±2212 or ±2112) is a spectator candidate when it has
+    small transverse momentum AND rapidity close to either the projectile
+    or target reference rapidity (both in the *input* file frame):
+
+        pT < pt_max  AND  |y - y_ref| < y_tol
+
+    Parameters
+    ----------
+    particles : list of Particle
+        Final-state particles for one event (in the input file frame).
+    y_proj : float
+        Reference rapidity for projectile spectators in the input frame.
+        For fixed-target (target frame): y_proj = 2 * y_cm.
+        For collider (cm frame): y_proj = +y_beam.
+    y_targ : float
+        Reference rapidity for target spectators in the input frame.
+        For fixed-target (target frame): y_targ = 0.0 (target at rest).
+        For collider (cm frame): y_targ = -y_beam.
+    y_tol : float
+        Half-window in rapidity around each reference.  Default 0.5.
+    pt_max : float
+        Maximum pT [GeV/c] allowed for a spectator.  Default 0.2.
+
+    Returns
+    -------
+    int
+        Number of spectator-like nucleons in this event.
+    """
+    n_spec = 0
+    for p in particles:
+        if p.pdg not in PDG_NUCLEONS:
+            continue
+        pt = p.pt()
+        if pt >= pt_max:
+            continue
+        y = p.rapidity()
+        if not math.isfinite(y):
+            continue
+        if abs(y - y_proj) < y_tol or abs(y - y_targ) < y_tol:
+            n_spec += 1
+    return n_spec
+
+
+def _spectator_refs(
+    collision_mode: str,
+    input_frame: str,
+    y_shift: float,
+    ecm_snn: Optional[float],
+    beam_kinetic_agev: Optional[float],
+) -> tuple[float, float]:
+    """Return (y_proj_input, y_targ_input) in the *input file* frame.
+
+    These are the rapidities at which spectator nucleons from the projectile
+    and the target are expected to appear in the f19 output.
+    """
+    mode = collision_mode if collision_mode != "fixed" else "fixed-target"
+
+    if mode == "fixed-target":
+        # In the target (lab) frame: target nucleons sit at y=0,
+        # projectile nucleons at y = 2*y_cm (beam rapidity in lab frame).
+        if beam_kinetic_agev is not None:
+            y_cm = ycm_fixed_target(beam_kinetic_agev)
+        elif ecm_snn is not None:
+            y_cm = ycm_from_sqrts_fixed_target(ecm_snn)
+        else:
+            # y_shift already holds y_cm when input_frame=="target"
+            y_cm = abs(y_shift)
+
+        if input_frame == "target":
+            y_targ_input = 0.0
+            y_proj_input = 2.0 * y_cm
+        elif input_frame == "projectile":
+            y_targ_input = -2.0 * y_cm
+            y_proj_input = 0.0
+        else:  # cm
+            y_targ_input = -y_cm
+            y_proj_input = +y_cm
+        return y_proj_input, y_targ_input
+
+    if mode == "collider":
+        if ecm_snn is None:
+            raise ValueError("Need --ecm-snn to determine spectator rapidity for collider mode")
+        y_beam = ybeam_collider_from_sqrts(ecm_snn)
+        if input_frame == "cm":
+            return +y_beam, -y_beam
+        if input_frame == "projectile":
+            return 0.0, -2.0 * y_beam
+        if input_frame == "target":
+            return +2.0 * y_beam, 0.0
+
+    raise ValueError(f"Unsupported collision_mode={collision_mode}")
+
+
+# ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
 
@@ -473,6 +607,11 @@ def analyze(
     y_max: float,
     k0_mode: str,
     selected_event_ids: Optional[set[int]] = None,
+    # wounded-nucleon parameters
+    y_proj_input: Optional[float] = None,
+    y_targ_input: Optional[float] = None,
+    y_spec_tol: float = 0.5,
+    pt_spec_max: float = 0.2,
 ) -> dict:
     pt_edges = make_edges(pt_bins, 0.0, pt_max)
     y_edges = make_edges(y_bins, y_min, y_max)
@@ -501,11 +640,29 @@ def analyze(
     n_particles_seen = 0
     n_events_seen_total = 0
 
+    # wounded-nucleon accumulators
+    npart_enabled = (y_proj_input is not None and y_targ_input is not None)
+    nspec_sum = 0
+    nspec_sq_sum = 0  # for std-dev
+
     for particles in stream_events(path, layout):
         n_events_seen_total += 1
         if selected_event_ids is not None and n_events_seen_total not in selected_event_ids:
             continue
         n_events += 1
+
+        # --- wounded-nucleon counting per event ---
+        if npart_enabled:
+            n_spec = count_spectators(
+                particles,
+                y_proj=y_proj_input,
+                y_targ=y_targ_input,
+                y_tol=y_spec_tol,
+                pt_max=pt_spec_max,
+            )
+            nspec_sum += n_spec
+            nspec_sq_sum += n_spec * n_spec
+
         for particle in particles:
             n_particles_seen += 1
 
@@ -537,6 +694,17 @@ def analyze(
                     if 0 <= ip < pt_bins:
                         pt_counts[target][ip] += 1
 
+    # compute mean N_spec and mean N_part
+    nev = max(n_events, 1)
+    if npart_enabled:
+        mean_nspec = nspec_sum / nev
+        # variance: E[x^2] - E[x]^2
+        var_nspec = max(nspec_sq_sum / nev - mean_nspec ** 2, 0.0)
+        std_nspec = math.sqrt(var_nspec)
+    else:
+        mean_nspec = float("nan")
+        std_nspec = float("nan")
+
     return {
         "n_events": n_events,
         "n_events_seen_total": n_events_seen_total,
@@ -552,6 +720,14 @@ def analyze(
         "k0_mode": k0_mode,
         "k0s_codes": k0s_codes,
         "neutral_scale": neutral_scale,
+        # wounded-nucleon results
+        "npart_enabled": npart_enabled,
+        "mean_nspec": mean_nspec,
+        "std_nspec": std_nspec,
+        "y_proj_input": y_proj_input,
+        "y_targ_input": y_targ_input,
+        "y_spec_tol": y_spec_tol,
+        "pt_spec_max": pt_spec_max,
     }
 
 
@@ -1022,6 +1198,15 @@ def save_summary(outdir: Path, res: dict) -> None:
         ["centrality_selected_events", res.get("centrality_selected_events", "")],
         ["centrality_total_events_seen", res.get("centrality_total_events_seen", "")],
         ["centrality_threshold_activity", res.get("centrality_threshold_activity", "")],
+        # wounded-nucleon block
+        ["npart_enabled", res.get("npart_enabled", False)],
+        ["y_proj_input", res.get("y_proj_input", "")],
+        ["y_targ_input", res.get("y_targ_input", "")],
+        ["y_spec_tol", res.get("y_spec_tol", "")],
+        ["pt_spec_max_gev", res.get("pt_spec_max", "")],
+        ["mean_Nspec", "" if not res.get("npart_enabled") else f"{res.get('mean_nspec', float('nan')):.4f}"],
+        ["std_Nspec",  "" if not res.get("npart_enabled") else f"{res.get('std_nspec',  float('nan')):.4f}"],
+        ["mean_Npart_note", "N_part = A_proj + A_targ - mean_Nspec  (fill in A values manually)"],
     ]
     for name in ("Kplus", "Kminus", "K0S"):
         scale = res.get("neutral_scale", 1.0) if name == "K0S" else 1.0
@@ -1070,6 +1255,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--beam-label", default="")
     parser.add_argument("--centrality-top-fraction", type=float, default=None, help="Keep only the top fraction of events ranked by charged-particle activity, e.g. 0.10 for top 10% most active events.")
     parser.add_argument("--centrality-activity-ymax", type=float, default=None, help="Optional |y| acceptance used when defining event activity. If omitted, all charged particles are counted.")
+    # wounded-nucleon options
+    parser.add_argument("--npart", action="store_true", help="Enable wounded-nucleon (N_part) estimation via spectator subtraction from f19 momenta.")
+    parser.add_argument("--y-spec-tol", type=float, default=0.5, help="Rapidity half-window for spectator identification (default: 0.5).")
+    parser.add_argument("--pt-spec-max", type=float, default=0.2, help="Maximum pT [GeV/c] for spectator nucleons (default: 0.2).")
     return parser.parse_args(argv)
 
 
@@ -1092,6 +1281,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         requested_k0_mode = "strong"
     k0_mode, k0_info = _resolve_k0_mode(in_path, layout, requested_k0_mode)
     selected_event_ids, centrality_info = select_events_by_activity(in_path, layout, args.centrality_top_fraction, args.centrality_activity_ymax)
+
+    # resolve spectator reference rapidities
+    y_proj_input = None
+    y_targ_input = None
+    if args.npart:
+        try:
+            y_proj_input, y_targ_input = _spectator_refs(
+                collision_mode=args.collision_mode,
+                input_frame=args.input_frame,
+                y_shift=y_shift,
+                ecm_snn=args.ecm_snn,
+                beam_kinetic_agev=args.beam_kinetic_agev,
+            )
+        except ValueError as exc:
+            print(f"[warning] N_part estimation disabled: {exc}", file=sys.stderr)
+
     print(f"[analyze_urqmd_kaons] file={in_path} layout={layout} outdir={outdir}")
     print(f" collision_mode={args.collision_mode}")
     print(f" input_frame={args.input_frame}")
@@ -1102,7 +1307,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f" k0_prescan: events={k0_info['scanned_events']} N_310={k0_info['n_310']} N_311={k0_info['n_311']} N_-311={k0_info['n_m311']}")
     if centrality_info.get("enabled"):
         print(f" centrality_filter=top_activity_fraction {centrality_info['requested_fraction']:.6f}; selected={centrality_info['selected_events']}/{centrality_info['total_events_seen']}; threshold_activity={centrality_info['threshold_activity']}; activity_|y|<={centrality_info['activity_y_max']}")
-    res = analyze(in_path, layout=layout, ycut=args.ycut, y_shift=y_shift, pt_bins=args.pt_bins, pt_max=args.pt_max, y_bins=args.y_bins, y_min=args.y_min, y_max=args.y_max, k0_mode=k0_mode, selected_event_ids=selected_event_ids)
+    if y_proj_input is not None:
+        print(f" npart: y_proj_input={y_proj_input:.4f} y_targ_input={y_targ_input:.4f} y_spec_tol={args.y_spec_tol} pt_spec_max={args.pt_spec_max}")
+
+    res = analyze(
+        in_path,
+        layout=layout,
+        ycut=args.ycut,
+        y_shift=y_shift,
+        pt_bins=args.pt_bins,
+        pt_max=args.pt_max,
+        y_bins=args.y_bins,
+        y_min=args.y_min,
+        y_max=args.y_max,
+        k0_mode=k0_mode,
+        selected_event_ids=selected_event_ids,
+        y_proj_input=y_proj_input,
+        y_targ_input=y_targ_input,
+        y_spec_tol=args.y_spec_tol,
+        pt_spec_max=args.pt_spec_max,
+    )
     res["collision_system"] = args.system
     res["beam_label"] = args.beam_label
     res["input_frame"] = args.input_frame
@@ -1124,6 +1348,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f" totals: K+={res['total_yield']['Kplus']} K-={res['total_yield']['Kminus']} K0S_equiv={k0s_total:g}")
     print(f" neutral raw counts used for K0S_equiv: {res['total_yield']['K0S']} (scale={neutral_scale:g}, codes={res['k0s_codes']})")
     print(f" in |y_analysis|<{args.ycut}: K+={res['yield_in_window']['Kplus']} K-={res['yield_in_window']['Kminus']} K0S_equiv={k0s_window:g}")
+    if res.get("npart_enabled"):
+        print(f" mean_Nspec={res['mean_nspec']:.2f} +/- {res['std_nspec']:.2f}  (N_part = A_proj + A_targ - mean_Nspec)")
     normalize = not args.no_normalize
     save_pt_spectra(outdir, res, normalize=normalize)
     save_pt_spectra_dn(outdir, res)
