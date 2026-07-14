@@ -454,7 +454,7 @@ def _urqmd_overlay_label(species_tex: str, modified: bool) -> str:
 
 def _urqmd_ratio_label(modified: bool) -> str:
     base = r"UrQMD(3:1)" if modified else r"UrQMD"
-    return base + r" (bin stat. err.)"
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -804,7 +804,7 @@ def make_pan_ratio_y(urqmd_dir: Path, outpath: Path) -> None:
     ax.axhline(1.0, ls=":", lw=0.9, color="black")
     if finite.any():
         ax.errorbar(yc[finite], Rk[finite], yerr=Rk_e[finite],
-                    label=r"$R_K(y)$ (bin stat. err.)",
+                    label=r"$R_K(y)$",
                     capsize=1.5, elinewidth=0.7, **STYLE["ratio_y"])
     ax.set_xlabel(r"$y$")
     ax.set_ylabel(r"$R_K(y)$")
