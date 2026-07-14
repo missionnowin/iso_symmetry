@@ -506,7 +506,7 @@ def _urqmd_overlay_label(species_tex: str, modified: bool) -> str:
 
 def _urqmd_ratio_label(modified: bool) -> str:
     base = r"UrQMD(3:1)" if modified else r"UrQMD"
-    return base + r" (statistical uncertainty)"
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -856,7 +856,7 @@ def make_pan_ratio_y(urqmd_dir: Path, outpath: Path) -> None:
     ax.axhline(1.0, ls=":", lw=0.9, color="black")
     if finite.any():
         ax.errorbar(yc[finite], Rk[finite], yerr=Rk_e[finite],
-                    label=r"$R_K(y)$ (statistical uncertainty)",
+                    label=r"$R_K(y)$",
                     capsize=1.5, elinewidth=0.7, **STYLE["ratio_y"])
     ax.set_xlabel(r"$y$")
     ax.set_ylabel(r"$R_K(y)$")
@@ -994,8 +994,6 @@ def make_dn_pt_overlay(
                     label=_urqmd_overlay_label(r"$K^0_S$", modified),
                     **STYLE["urqmd_k0s"])
     if len(kch[1]) > 0:
-        _stat_hatch_band(ax_top, kch[0], kch[1], kch[2],
-                         label=r"UrQMD statistical uncertainty")
         ax_top.plot(kch[0], kch[1],
                     label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
                     **STYLE["urqmd_kch"])
@@ -1224,8 +1222,6 @@ def make_dn_pt_plain(
                     label=_urqmd_overlay_label(r"$K^0_S$", modified),
                     **STYLE["urqmd_k0s"])
     if len(kch[1]) > 0:
-        _stat_hatch_band(ax_top, kch[0], kch[1], kch[2],
-                         label=r"UrQMD statistical uncertainty")
         ax_top.plot(kch[0], kch[1],
                     label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
                     **STYLE["urqmd_kch"])
