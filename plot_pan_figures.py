@@ -43,6 +43,10 @@ Outputs per system (all as .eps + .png), e.g. for Ar+Sc:
   ArSc_11p9GeV_dn_pt_overlay_unmod.{eps,png}      -- UrQMD dn/dpT + R(pT) (single variant) vs dn/dpT
   ArSc_11p9GeV_dn_pt_overlay_mod.{eps,png}
   ArSc_11p9GeV_k0s_2d_combined_overlay.{eps,png}  -- K0S d2n/dydpT vs exp
+  ArSc_11p9GeV_dn_rap_plain_unmod.{eps,png}       -- UrQMD dn/dy: (K++K-)/2 vs K0S only (no exp)
+  ArSc_11p9GeV_dn_rap_plain_mod.{eps,png}
+  ArSc_11p9GeV_dn_pt_plain_unmod.{eps,png}        -- UrQMD dn/dpT + R(pT): (K++K-)/2 vs K0S only (no exp)
+  ArSc_11p9GeV_dn_pt_plain_mod.{eps,png}
 
 NOTE: energy_str uses 'p' instead of '.' (e.g. 11p9GeV) to avoid
 Windows treating the decimal as a file extension separator.
@@ -76,6 +80,13 @@ for each rapidity bin, overlaying:
   - mod  UrQMD  (dashed line, no markers)
   - NA61/SHINE experimental data (filled circles with stat+sys errors)
 This uses hep_data/Figure7.csv which contains the 2D (y, pT) spectrum.
+
+dn_rap_plain / dn_pt_plain note
+---------------------------------
+These plots show only UrQMD simulation results -- (K++K-)/2 and K0S --
+with NO experimental data overlaid.  One figure per variant (unmod/mod).
+dn_rap_plain: single panel, dn/dy vs y.
+dn_pt_plain:  two-panel -- dn/dpT linear (top) + R(pT) = (K++K-)/2 / K0S (bottom).
 """
 
 from __future__ import annotations
@@ -1052,6 +1063,136 @@ def make_k0s_2d_combined_overlay(
 
 
 # ---------------------------------------------------------------------------
+# dn_rap_plain -- UrQMD dn/dy only: (K++K-)/2 vs K0S  (NO experimental data)
+# ---------------------------------------------------------------------------
+
+def make_dn_rap_plain(
+    urqmd_dir: Path,
+    outpath: Path,
+    modified: bool = False,
+) -> None:
+    """
+    Single panel: UrQMD dn/dy comparison of (K++K-)/2 and K0S.
+    No experimental data -- UrQMD simulation only.
+    One figure per variant (unmod/mod).
+    """
+    csv_path = urqmd_dir / "y_distributions_dn.csv"
+    if not csv_path.exists():
+        print(f"  [warn] {csv_path} not found -- skipping dn_rap_plain")
+        return
+
+    data = load_urqmd_dn_y_distributions(csv_path)
+
+    fig, ax = plt.subplots(figsize=(6.5, 5.0))
+
+    if "K0S" in data:
+        yc, val, err = data["K0S"]
+        ax.errorbar(yc, val, yerr=err,
+                    label=_urqmd_overlay_label(r"$K^0_S$", modified),
+                    ls="-", lw=1.4, marker="^", ms=4,
+                    mfc="white", mec="black", color="black",
+                    capsize=2, elinewidth=0.7)
+
+    if "Kplus" in data and "Kminus" in data:
+        yc_p, vp, ep = data["Kplus"]
+        yc_m, vm, em = data["Kminus"]
+        if len(yc_p) == len(yc_m):
+            kch_val = 0.5 * (vp + vm)
+            kch_err = 0.5 * np.sqrt(ep**2 + em**2)
+            ax.errorbar(yc_p, kch_val, yerr=kch_err,
+                        label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
+                        ls="--", lw=1.4, marker="o", ms=4,
+                        mfc="white", mec="black", color="black",
+                        capsize=2, elinewidth=0.7)
+
+    ax.set_xlabel(r"$y$")
+    ax.set_ylabel(r"$dn/dy$")
+    ax.xaxis.set_minor_locator(AutoMinorLocator())
+    ax.yaxis.set_minor_locator(AutoMinorLocator())
+    ax.legend(loc="upper right", fontsize=9)
+    fig.tight_layout()
+    _save(fig, outpath)
+    plt.close(fig)
+    print(f"  wrote {outpath.with_suffix('.eps')}")
+
+
+# ---------------------------------------------------------------------------
+# dn_pt_plain -- UrQMD dn/dpT only: (K++K-)/2 vs K0S  (NO experimental data)
+# ---------------------------------------------------------------------------
+
+def make_dn_pt_plain(
+    urqmd_dir: Path,
+    outpath: Path,
+    modified: bool = False,
+) -> None:
+    """
+    Two-panel: UrQMD dn/dpT linear (top) + R(pT) = (K++K-)/2 / K0S (bottom).
+    No experimental data -- UrQMD simulation only.
+    One figure per variant (unmod/mod).
+    """
+    csv_pt = urqmd_dir / "pt_spectra_dn.csv"
+    if not csv_pt.exists():
+        print(f"  [warn] {csv_pt} not found -- skipping dn_pt_plain")
+        return
+
+    data = load_urqmd_dn_pt_spectra(csv_pt)
+
+    k0s = data.get("K0S",    (np.array([]),)*3)
+    kp  = data.get("Kplus",  (np.array([]),)*3)
+    km  = data.get("Kminus", (np.array([]),)*3)
+    if len(kp[1]) == len(km[1]) > 0:
+        kch = (kp[0], 0.5*(kp[1]+km[1]), 0.5*np.sqrt(kp[2]**2+km[2]**2))
+    else:
+        kch = (np.array([]),)*3
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        if len(kch[0]) > 0 and len(k0s[0]) > 0:
+            k0s_i = np.interp(kch[0], k0s[0], k0s[1], left=np.nan, right=np.nan)
+            R_dn  = np.where(k0s_i > 0, kch[1] / k0s_i, np.nan)
+            pt_r  = kch[0]
+        else:
+            pt_r = np.array([])
+            R_dn = np.array([])
+
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1, figsize=(6.5, 7.5),
+        gridspec_kw={"height_ratios": [2.5, 1], "hspace": 0.05},
+        sharex=True,
+    )
+
+    if len(k0s[1]) > 0:
+        ax_top.plot(k0s[0], k0s[1],
+                    label=_urqmd_overlay_label(r"$K^0_S$", modified),
+                    **STYLE["urqmd_k0s"])
+    if len(kch[1]) > 0:
+        ax_top.plot(kch[0], kch[1],
+                    label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
+                    **STYLE["urqmd_kch"])
+
+    ax_top.yaxis.set_minor_locator(AutoMinorLocator())
+    ax_top.set_ylabel(r"$dn/dp_T\;[(\mathrm{GeV}/c)^{-1}]$")
+    ax_top.legend(loc="upper right", fontsize=8)
+    ax_top.tick_params(labelbottom=False)
+
+    ax_bot.axhline(1.0, ls=":", lw=0.9, color="black")
+    finite_r = np.isfinite(R_dn)
+    if finite_r.any():
+        ax_bot.plot(pt_r[finite_r], R_dn[finite_r],
+                    label=_urqmd_ratio_label(modified), **STYLE["ratio_urqmd"])
+
+    ax_bot.set_xlabel(r"$p_T\;[\mathrm{GeV}/c]$")
+    ax_bot.set_ylabel(r"$R(p_T)$")
+    ax_bot.xaxis.set_minor_locator(AutoMinorLocator())
+    ax_bot.yaxis.set_minor_locator(AutoMinorLocator())
+    ax_bot.legend(loc="upper right", fontsize=8)
+    fig.align_ylabels([ax_top, ax_bot])
+    fig.tight_layout()
+    _save(fig, outpath)
+    plt.close(fig)
+    print(f"  wrote {outpath.with_suffix('.eps')}")
+
+
+# ---------------------------------------------------------------------------
 # Per-system driver
 # ---------------------------------------------------------------------------
 
@@ -1137,6 +1278,14 @@ def process_system(
         )
     elif hep7 is not None:
         print(f"  [warn] Fig7 HepData not found: {hep7} -- skipping k0s_2d_combined_overlay")
+
+    print("  dn/dy plain UrQMD-only: (K++K-)/2 vs K0S...")
+    make_dn_rap_plain(unmod_dir, sys_def.out(outdir, "dn_rap_plain", mod=False), modified=False)
+    make_dn_rap_plain(mod_dir,   sys_def.out(outdir, "dn_rap_plain", mod=True),  modified=True)
+
+    print("  dn/dpT plain UrQMD-only: (K++K-)/2 vs K0S + R(pT)...")
+    make_dn_pt_plain(unmod_dir, sys_def.out(outdir, "dn_pt_plain", mod=False), modified=False)
+    make_dn_pt_plain(mod_dir,   sys_def.out(outdir, "dn_pt_plain", mod=True),  modified=True)
 
 
 # ---------------------------------------------------------------------------
