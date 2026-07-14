@@ -36,6 +36,20 @@ Key frame convention
 --------------------
 y_analysis = y_input - y_cm_in_input_frame
 
+pT integration rapidity window
+------------------------------
+By default the pT spectra (pt_spectra.csv, pt_spectra_dn.csv, ratio_pt.csv)
+are integrated over the symmetric window |y_analysis| < ycut, i.e.
+    -ycut < y_analysis < +ycut
+
+To use a one-sided or arbitrary window (e.g. 0 < y < 2 to match NA61/SHINE
+acceptance), pass explicit limits:
+    --pt-y-min 0.0 --pt-y-max 2.0
+
+These override the symmetric |y|<ycut window for pT histogramming only.
+The rapidity distributions (y_distributions*.csv) always use the full
+y-axis range --y-min / --y-max.
+
 Wounded-nucleon (N_part) estimation
 ------------------------------------
 UrQMD f19 / OSCAR output does NOT carry a per-particle collision counter
@@ -44,8 +58,8 @@ identified kinematically and subtracted from the total nucleon count:
 
     N_part = A_proj + A_targ - N_spec
 
-A nucleon (PDG ±2212 or ±2112) is classified as a spectator when ALL of the
-following hold in the *input* (lab / target) frame:
+A nucleon (PDG +/-2212 or +/-2112) is classified as a spectator when ALL of
+the following hold in the *input* (lab / target) frame:
 
   1. |y - y_ref| < y_tol        -- rapidity close to beam or target rest value
   2. pT < pt_spec_max            -- small transverse kick
@@ -384,36 +398,7 @@ def count_spectators(
     y_tol: float = 0.5,
     pt_max: float = 0.2,
 ) -> int:
-    """Count spectator-like nucleons in a single event.
-
-    A nucleon (PDG ±2212 or ±2112) is a spectator candidate when it has
-    small transverse momentum AND rapidity close to either the projectile
-    or target reference rapidity (both in the *input* file frame):
-
-        pT < pt_max  AND  |y - y_ref| < y_tol
-
-    Parameters
-    ----------
-    particles : list of Particle
-        Final-state particles for one event (in the input file frame).
-    y_proj : float
-        Reference rapidity for projectile spectators in the input frame.
-        For fixed-target (target frame): y_proj = 2 * y_cm.
-        For collider (cm frame): y_proj = +y_beam.
-    y_targ : float
-        Reference rapidity for target spectators in the input frame.
-        For fixed-target (target frame): y_targ = 0.0 (target at rest).
-        For collider (cm frame): y_targ = -y_beam.
-    y_tol : float
-        Half-window in rapidity around each reference.  Default 0.5.
-    pt_max : float
-        Maximum pT [GeV/c] allowed for a spectator.  Default 0.2.
-
-    Returns
-    -------
-    int
-        Number of spectator-like nucleons in this event.
-    """
+    """Count spectator-like nucleons in a single event."""
     n_spec = 0
     for p in particles:
         if p.pdg not in PDG_NUCLEONS:
@@ -436,22 +421,15 @@ def _spectator_refs(
     ecm_snn: Optional[float],
     beam_kinetic_agev: Optional[float],
 ) -> tuple[float, float]:
-    """Return (y_proj_input, y_targ_input) in the *input file* frame.
-
-    These are the rapidities at which spectator nucleons from the projectile
-    and the target are expected to appear in the f19 output.
-    """
+    """Return (y_proj_input, y_targ_input) in the *input file* frame."""
     mode = collision_mode if collision_mode != "fixed" else "fixed-target"
 
     if mode == "fixed-target":
-        # In the target (lab) frame: target nucleons sit at y=0,
-        # projectile nucleons at y = 2*y_cm (beam rapidity in lab frame).
         if beam_kinetic_agev is not None:
             y_cm = ycm_fixed_target(beam_kinetic_agev)
         elif ecm_snn is not None:
             y_cm = ycm_from_sqrts_fixed_target(ecm_snn)
         else:
-            # y_shift already holds y_cm when input_frame=="target"
             y_cm = abs(y_shift)
 
         if input_frame == "target":
@@ -607,6 +585,9 @@ def analyze(
     y_max: float,
     k0_mode: str,
     selected_event_ids: Optional[set[int]] = None,
+    # pT integration rapidity window (overrides symmetric |y|<ycut if set)
+    pt_y_min: Optional[float] = None,
+    pt_y_max: Optional[float] = None,
     # wounded-nucleon parameters
     y_proj_input: Optional[float] = None,
     y_targ_input: Optional[float] = None,
@@ -615,6 +596,18 @@ def analyze(
 ) -> dict:
     pt_edges = make_edges(pt_bins, 0.0, pt_max)
     y_edges = make_edges(y_bins, y_min, y_max)
+
+    # Resolve effective pT rapidity window.
+    # If --pt-y-min / --pt-y-max are given, use them directly.
+    # Otherwise fall back to symmetric |y| < ycut.
+    if pt_y_min is not None and pt_y_max is not None:
+        _pt_y_lo = pt_y_min
+        _pt_y_hi = pt_y_max
+        _pt_y_symmetric = False
+    else:
+        _pt_y_lo = -ycut
+        _pt_y_hi = +ycut
+        _pt_y_symmetric = True
 
     if k0_mode == "strong":
         k0s_codes = (PDG_K0, PDG_K0BAR)
@@ -643,7 +636,7 @@ def analyze(
     # wounded-nucleon accumulators
     npart_enabled = (y_proj_input is not None and y_targ_input is not None)
     nspec_sum = 0
-    nspec_sq_sum = 0  # for std-dev
+    nspec_sq_sum = 0
 
     for particles in stream_events(path, layout):
         n_events_seen_total += 1
@@ -651,7 +644,6 @@ def analyze(
             continue
         n_events += 1
 
-        # --- wounded-nucleon counting per event ---
         if npart_enabled:
             n_spec = count_spectators(
                 particles,
@@ -681,12 +673,15 @@ def analyze(
 
             y_analysis = y - y_shift
 
+            # --- rapidity distribution histogram (full y range) ---
             if y_min <= y_analysis < y_max:
                 iy = int((y_analysis - y_min) / (y_max - y_min) * y_bins)
                 if 0 <= iy < y_bins:
                     y_counts[target][iy] += 1
 
-            if abs(y_analysis) < ycut:
+            # --- pT histogram: use configurable [_pt_y_lo, _pt_y_hi) window ---
+            in_pt_window = (_pt_y_lo <= y_analysis < _pt_y_hi)
+            if in_pt_window:
                 yield_in_window[target] += 1
                 pt = particle.pt()
                 if 0.0 <= pt < pt_max:
@@ -694,11 +689,9 @@ def analyze(
                     if 0 <= ip < pt_bins:
                         pt_counts[target][ip] += 1
 
-    # compute mean N_spec and mean N_part
     nev = max(n_events, 1)
     if npart_enabled:
         mean_nspec = nspec_sum / nev
-        # variance: E[x^2] - E[x]^2
         var_nspec = max(nspec_sq_sum / nev - mean_nspec ** 2, 0.0)
         std_nspec = math.sqrt(var_nspec)
     else:
@@ -716,11 +709,13 @@ def analyze(
         "total_yield": total_yield,
         "yield_in_window": yield_in_window,
         "ycut": ycut,
+        "pt_y_lo": _pt_y_lo,
+        "pt_y_hi": _pt_y_hi,
+        "pt_y_symmetric": _pt_y_symmetric,
         "y_shift": y_shift,
         "k0_mode": k0_mode,
         "k0s_codes": k0s_codes,
         "neutral_scale": neutral_scale,
-        # wounded-nucleon results
         "npart_enabled": npart_enabled,
         "mean_nspec": mean_nspec,
         "std_nspec": std_nspec,
@@ -755,10 +750,17 @@ def _format_nev(n_events: int) -> str:
 
 
 def _analysis_y_label(res: dict) -> str:
-    #if abs(float(res.get("y_shift", 0.0))) < 1e-12:
-     #   return "y"
-    #return r"y-y_{cm}"
     return "y"
+
+
+def _pt_window_label(res: dict) -> str:
+    """Human-readable label for the pT rapidity integration window."""
+    lo = res.get("pt_y_lo", -res.get("ycut", 0.5))
+    hi = res.get("pt_y_hi", +res.get("ycut", 0.5))
+    sym = res.get("pt_y_symmetric", True)
+    if sym:
+        return rf"$|y|<{hi:.2f}$"
+    return rf"${lo:.2f} < y < {hi:.2f}$"
 
 
 def _add_plot_info(ax, res: dict, loc: str = "lower left") -> None:
@@ -783,7 +785,7 @@ def _add_plot_info(ax, res: dict, loc: str = "lower left") -> None:
 
 
 # ---------------------------------------------------------------------------
-# pT spectra -- dN/dpT (total, existing behaviour)
+# pT spectra -- dN/dpT (total)
 # ---------------------------------------------------------------------------
 
 
@@ -810,11 +812,11 @@ def save_pt_spectra(outdir: Path, res: dict, normalize: bool) -> None:
         ax.errorbar(centers, yvals, yerr=yerr, marker="o", ms=4, lw=1.2, capsize=2, label=_label(name))
         for i, ctr in enumerate(centers):
             rows.append([name, f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}", f"{counts[i]:.6e}", f"{yvals[i]:.6e}", f"{yerr[i]:.6e}"])
-    y_label = _analysis_y_label(res)
+    win = _pt_window_label(res)
     ax.set_xlabel(r"$p_T$ [GeV/c]")
     ax.set_ylabel(ylabel)
     ax.set_yscale("log")
-    ax.set_title(f"Kaon $p_T$ spectra, $|{y_label}|<{res['ycut']:.2f}$")
+    ax.set_title(f"Kaon $p_T$ spectra, {win}")
     _add_plot_info(ax, res, loc="lower left")
     ax.legend()
     ax.grid(True, which="both", ls=":", alpha=0.5)
@@ -825,20 +827,11 @@ def save_pt_spectra(outdir: Path, res: dict, normalize: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# pT spectra -- dn/dpT  (per-event, NEW)
+# pT spectra -- dn/dpT  (per-event)
 # ---------------------------------------------------------------------------
 
 
 def save_pt_spectra_dn(outdir: Path, res: dict) -> None:
-    """Write pt_spectra_dn.csv and pt_spectra_dn.png with per-event dn/dpT.
-
-    dn/dpT = (1/N_ev) * dN/dpT
-           = counts / (N_ev * delta_pT)
-
-    The CSV columns are identical to pt_spectra.csv but 'value' and 'error'
-    now hold dn/dpT and its statistical uncertainty instead of dN/dpT.
-    A header comment line records N_ev so the normalisation is unambiguous.
-    """
     edges = res["pt_edges"]
     centers = 0.5 * (edges[:-1] + edges[1:])
     widths = np.diff(edges)
@@ -852,7 +845,6 @@ def save_pt_spectra_dn(outdir: Path, res: dict) -> None:
         scale = res.get("neutral_scale", 1.0) if name == "K0S" else 1.0
         counts = scale * raw
         err_counts = scale * np.sqrt(np.maximum(raw, 0.0))
-        # per-event normalisation
         dn = counts / (nev * widths)
         dn_err = err_counts / (nev * widths)
         ax.errorbar(centers, dn, yerr=dn_err, marker="o", ms=4, lw=1.2, capsize=2, label=_label(name))
@@ -865,11 +857,11 @@ def save_pt_spectra_dn(outdir: Path, res: dict) -> None:
                 f"{dn_err[i]:.6e}",
             ])
 
-    y_label = _analysis_y_label(res)
+    win = _pt_window_label(res)
     ax.set_xlabel(r"$p_T$ [GeV/c]")
     ax.set_ylabel(r"$dn/dp_T$ [(GeV/c)$^{-1}$]")
     ax.set_yscale("log")
-    ax.set_title(f"Kaon $p_T$ spectra (per event), $|{y_label}|<{res['ycut']:.2f}$")
+    ax.set_title(f"Kaon $p_T$ spectra (per event), {win}")
     _add_plot_info(ax, res, loc="lower left")
     ax.legend()
     ax.grid(True, which="both", ls=":", alpha=0.5)
@@ -877,10 +869,11 @@ def save_pt_spectra_dn(outdir: Path, res: dict) -> None:
     fig.savefig(outdir / "pt_spectra_dn.png", dpi=140)
     plt.close(fig)
 
-    # write CSV with a leading comment so the normalisation is self-documenting
     csv_path = outdir / "pt_spectra_dn.csv"
     with open(csv_path, "w", newline="") as f:
-        f.write(f"# dn/dpT per-event spectrum; N_ev={nev}\n")
+        lo = res.get("pt_y_lo", -res.get("ycut", 0.5))
+        hi = res.get("pt_y_hi", +res.get("ycut", 0.5))
+        f.write(f"# dn/dpT per-event spectrum; N_ev={nev}; pt_y_window=[{lo:.4f},{hi:.4f})\n")
         writer = csv.writer(f)
         writer.writerow(["species", "pt_lo", "pt_hi", "pt_center", "counts", "dn_dpt", "dn_dpt_err"])
         for row in rows:
@@ -888,17 +881,11 @@ def save_pt_spectra_dn(outdir: Path, res: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# y distributions  --  dN/dy (total, existing behaviour)
+# y distributions  --  dN/dy (total)
 # ---------------------------------------------------------------------------
 
 
 def save_y_distributions(outdir: Path, res: dict, normalize: bool) -> None:
-    """Three-species dN/dy plot: K+, K-, K0_S only.
-
-    The mean-charged curve has been moved to its own dedicated panel
-    (save_y_distributions_meancharged) so this plot shows ONLY the three
-    primary species.
-    """
     edges = res["y_edges"]
     centers = 0.5 * (edges[:-1] + edges[1:])
     widths = np.diff(edges)
@@ -922,7 +909,8 @@ def save_y_distributions(outdir: Path, res: dict, normalize: bool) -> None:
         for i, ctr in enumerate(centers):
             rows.append([name, f"{edges[i]:.4f}", f"{edges[i + 1]:.4f}", f"{ctr:.4f}", f"{counts[i]:.6e}", f"{yvals[i]:.6e}", f"{yerr[i]:.6e}"])
     y_label = _analysis_y_label(res)
-    ax.axvspan(-res["ycut"], res["ycut"], color="grey", alpha=0.10, label=rf"central window $\pm${res['ycut']:.2f}")
+    ax.axvspan(res["pt_y_lo"], res["pt_y_hi"], color="grey", alpha=0.10,
+               label=rf"pT window {_pt_window_label(res)}")
     ax.set_xlabel(y_label)
     ax.set_ylabel(ylabel)
     ax.set_title(r"Kaon rapidity distributions: $K^+$, $K^-$, $K^0_S$")
@@ -936,18 +924,11 @@ def save_y_distributions(outdir: Path, res: dict, normalize: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# y distributions -- dn/dy  (per-event, NEW)
+# y distributions -- dn/dy  (per-event)
 # ---------------------------------------------------------------------------
 
 
 def save_y_distributions_dn(outdir: Path, res: dict) -> None:
-    """Write y_distributions_dn.csv and y_distributions_dn.png with per-event dn/dy.
-
-    dn/dy = (1/N_ev) * dN/dy
-          = counts / (N_ev * delta_y)
-
-    A header comment line records N_ev so the normalisation is unambiguous.
-    """
     edges = res["y_edges"]
     centers = 0.5 * (edges[:-1] + edges[1:])
     widths = np.diff(edges)
@@ -961,7 +942,6 @@ def save_y_distributions_dn(outdir: Path, res: dict) -> None:
         scale = res.get("neutral_scale", 1.0) if name == "K0S" else 1.0
         counts = scale * raw
         err_counts = scale * np.sqrt(np.maximum(raw, 0.0))
-        # per-event normalisation
         dn = counts / (nev * widths)
         dn_err = err_counts / (nev * widths)
         ax.errorbar(centers, dn, yerr=dn_err, marker="s", ms=4, lw=1.2, capsize=2, label=_label(name))
@@ -975,8 +955,8 @@ def save_y_distributions_dn(outdir: Path, res: dict) -> None:
             ])
 
     y_label = _analysis_y_label(res)
-    ax.axvspan(-res["ycut"], res["ycut"], color="grey", alpha=0.10,
-               label=rf"central window $\pm${res['ycut']:.2f}")
+    ax.axvspan(res["pt_y_lo"], res["pt_y_hi"], color="grey", alpha=0.10,
+               label=rf"pT window {_pt_window_label(res)}")
     ax.set_xlabel(y_label)
     ax.set_ylabel(r"$dn/dy$")
     ax.set_title(r"Kaon rapidity distributions (per event): $K^+$, $K^-$, $K^0_S$")
@@ -997,22 +977,11 @@ def save_y_distributions_dn(outdir: Path, res: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# y distributions  --  (K+ + K-)/2  vs  2 * K0_S   (unchanged)
+# y distributions  --  (K+ + K-)/2  vs  K0_S
 # ---------------------------------------------------------------------------
 
 
 def save_y_distributions_meancharged(outdir: Path, res: dict, normalize: bool) -> None:
-    """Dedicated panel comparing  (K+ + K-)/2  to  2 * K0_S  in dN/dy.
-
-    The isospin-symmetry test of Eq. (2) reads
-
-        R_K = (<K+> + <K->) / (2 <K0_S>) = 1
-
-    Plotting (K+ + K-)/2 and 2*K0_S together makes the test direct: under
-    exact isospin symmetry the two curves must coincide.  Equivalently this
-    is the same as plotting (K+ + K-)/2 against <K0_S> after multiplying by 2,
-    or (K+ + K-) against 2*K0_S -- we use the half/double convention here.
-    """
     edges = res["y_edges"]
     centers = 0.5 * (edges[:-1] + edges[1:])
     widths = np.diff(edges)
@@ -1042,7 +1011,8 @@ def save_y_distributions_meancharged(outdir: Path, res: dict, normalize: bool) -
     ax.errorbar(centers, mean_vals, yerr=mean_yerr, marker="D", ms=5, lw=1.6, capsize=2, ls="-", color="C3", label=r"$(K^+ + K^-)/2$")
     ax.errorbar(centers, k0s_vals, yerr=k0s_yerr, marker="o", ms=5, lw=1.6, capsize=2, ls="--", color="C2", label=r"$K^0_S$")
     y_label = _analysis_y_label(res)
-    ax.axvspan(-res["ycut"], res["ycut"], color="grey", alpha=0.10, label=rf"central window $\pm${res['ycut']:.2f}")
+    ax.axvspan(res["pt_y_lo"], res["pt_y_hi"], color="grey", alpha=0.10,
+               label=rf"pT window {_pt_window_label(res)}")
     ax.set_xlabel(y_label)
     ax.set_ylabel(ylabel)
     ax.set_title(r"$(K^+ + K^-)/2$ vs $K^0_S$")
@@ -1088,10 +1058,10 @@ def save_ratio(outdir: Path, res: dict) -> None:
     ax.fill_between([edges[0], edges[-1]], 0.95, 1.05, color="#20808D", alpha=0.10, lw=0, label=r"$\pm$5% band")
     if finite.any():
         ax.errorbar(centers[finite], ratio[finite], yerr=err[finite], marker="o", ms=4, lw=1.2, capsize=2, color="C3", label=r"$0.5(K^+ + K^-)/K^0_S$")
-    y_label = _analysis_y_label(res)
+    win = _pt_window_label(res)
     ax.set_xlabel(r"$p_T$ [GeV/c]")
     ax.set_ylabel(r"$R(p_T) = \frac{1}{2}(K^+ + K^-)/K^0_S$")
-    ax.set_title(f"Kaon ratio, $|{y_label}|<{res['ycut']:.2f}$")
+    ax.set_title(f"Kaon ratio, {win}")
     _add_plot_info(ax, res, loc="upper left")
     ax.grid(True, ls=":", alpha=0.5)
     ax.legend()
@@ -1100,20 +1070,12 @@ def save_ratio(outdir: Path, res: dict) -> None:
     plt.close(fig)
 
 
-
-
 # ---------------------------------------------------------------------------
-# R_K(y)  --  isospin ratio (K+ + K-)/2  /  K0_S  vs rapidity
+# R_K(y)
 # ---------------------------------------------------------------------------
 
 
 def save_ratio_y(outdir: Path, res: dict) -> None:
-    """Plot and save R_K(y) = 0.5*(K+ + K-) / K0_S as a function of rapidity.
-
-    Under exact isospin symmetry R_K = 1 everywhere.
-    Deviations reveal where charge symmetry is broken across rapidity.
-    Complements save_ratio() which shows the same observable vs p_T.
-    """
     edges = res["y_edges"]
     centers = 0.5 * (edges[:-1] + edges[1:])
     neutral_scale = res.get("neutral_scale", 1.0)
@@ -1157,12 +1119,12 @@ def save_ratio_y(outdir: Path, res: dict) -> None:
         ax.errorbar(
             centers[finite], ratio[finite], yerr=err[finite],
             marker="s", ms=4, lw=1.2, capsize=2, color="C1",
-            label=r"$R_K = \frac{1}{2}(K^+ + K^-)/K^0_S$",
+            label=r"$R_K = \frac{1}{2}(K^+ + K^-)\,/\,K^0_S$",
         )
     ax.axvspan(
-        -res["ycut"], res["ycut"],
+        res["pt_y_lo"], res["pt_y_hi"],
         color="grey", alpha=0.10,
-        label=rf"central window $\pm${res['ycut']:.2f}",
+        label=rf"pT window {_pt_window_label(res)}",
     )
     y_label = _analysis_y_label(res)
     ax.set_xlabel(y_label)
@@ -1175,6 +1137,7 @@ def save_ratio_y(outdir: Path, res: dict) -> None:
     fig.savefig(outdir / "ratio_y.png", dpi=140)
     plt.close(fig)
 
+
 def save_summary(outdir: Path, res: dict) -> None:
     nev = max(res["n_events"], 1)
     rows = [
@@ -1182,6 +1145,9 @@ def save_summary(outdir: Path, res: dict) -> None:
         ["n_events_seen_total", res.get("n_events_seen_total", res["n_events"])],
         ["n_particles_seen", res["n_particles_seen"]],
         ["ycut", res["ycut"]],
+        ["pt_y_lo", res.get("pt_y_lo", -res["ycut"])],
+        ["pt_y_hi", res.get("pt_y_hi", +res["ycut"])],
+        ["pt_y_symmetric", res.get("pt_y_symmetric", True)],
         ["y_shift", res.get("y_shift", 0.0)],
         ["input_frame", res.get("input_frame", "")],
         ["collision_mode", res.get("collision_mode", "")],
@@ -1198,7 +1164,6 @@ def save_summary(outdir: Path, res: dict) -> None:
         ["centrality_selected_events", res.get("centrality_selected_events", "")],
         ["centrality_total_events_seen", res.get("centrality_total_events_seen", "")],
         ["centrality_threshold_activity", res.get("centrality_threshold_activity", "")],
-        # wounded-nucleon block
         ["npart_enabled", res.get("npart_enabled", False)],
         ["y_proj_input", res.get("y_proj_input", "")],
         ["y_targ_input", res.get("y_targ_input", "")],
@@ -1241,7 +1206,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--y-shift", type=float, default=None)
     parser.add_argument("--beam-kinetic-agev", type=float, default=None)
     parser.add_argument("--ecm-snn", type=float, default=None)
-    parser.add_argument("--ycut", type=float, default=0.5)
+    parser.add_argument("--ycut", type=float, default=0.5,
+                        help="Symmetric pT rapidity window |y|<ycut (used unless --pt-y-min/--pt-y-max are given).")
+    parser.add_argument("--pt-y-min", type=float, default=None,
+                        help="Lower rapidity bound for pT histogram integration (e.g. 0.0 for 0<y<2). "
+                             "Must be used together with --pt-y-max. Overrides --ycut for pT spectra.")
+    parser.add_argument("--pt-y-max", type=float, default=None,
+                        help="Upper rapidity bound for pT histogram integration (e.g. 2.0 for 0<y<2). "
+                             "Must be used together with --pt-y-min. Overrides --ycut for pT spectra.")
     parser.add_argument("--pt-bins", type=int, default=20)
     parser.add_argument("--pt-max", type=float, default=2.0)
     parser.add_argument("--y-bins", type=int, default=20)
@@ -1253,12 +1225,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--include-k0", action="store_true", help="DEPRECATED. Equivalent to --k0-mode strong.")
     parser.add_argument("--system", default="")
     parser.add_argument("--beam-label", default="")
-    parser.add_argument("--centrality-top-fraction", type=float, default=None, help="Keep only the top fraction of events ranked by charged-particle activity, e.g. 0.10 for top 10% most active events.")
-    parser.add_argument("--centrality-activity-ymax", type=float, default=None, help="Optional |y| acceptance used when defining event activity. If omitted, all charged particles are counted.")
-    # wounded-nucleon options
-    parser.add_argument("--npart", action="store_true", default=True, help="Enable wounded-nucleon (N_part) estimation via spectator subtraction from f19 momenta.")
-    parser.add_argument("--y-spec-tol", type=float, default=0.5, help="Rapidity half-window for spectator identification (default: 0.5).")
-    parser.add_argument("--pt-spec-max", type=float, default=0.2, help="Maximum pT [GeV/c] for spectator nucleons (default: 0.2).")
+    parser.add_argument("--centrality-top-fraction", type=float, default=None)
+    parser.add_argument("--centrality-activity-ymax", type=float, default=None)
+    parser.add_argument("--npart", action="store_true", default=True)
+    parser.add_argument("--y-spec-tol", type=float, default=0.5)
+    parser.add_argument("--pt-spec-max", type=float, default=0.2)
     return parser.parse_args(argv)
 
 
@@ -1280,9 +1251,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.include_k0 and args.k0_mode == "auto":
         requested_k0_mode = "strong"
     k0_mode, k0_info = _resolve_k0_mode(in_path, layout, requested_k0_mode)
-    selected_event_ids, centrality_info = select_events_by_activity(in_path, layout, args.centrality_top_fraction, args.centrality_activity_ymax)
+    selected_event_ids, centrality_info = select_events_by_activity(
+        in_path, layout, args.centrality_top_fraction, args.centrality_activity_ymax
+    )
 
-    # resolve spectator reference rapidities
+    # validate --pt-y-min / --pt-y-max
+    pt_y_min = args.pt_y_min
+    pt_y_max = args.pt_y_max
+    if (pt_y_min is None) != (pt_y_max is None):
+        print("[error] --pt-y-min and --pt-y-max must both be provided or both omitted.", file=sys.stderr)
+        return 2
+    if pt_y_min is not None and pt_y_min >= pt_y_max:
+        print(f"[error] --pt-y-min ({pt_y_min}) must be less than --pt-y-max ({pt_y_max}).", file=sys.stderr)
+        return 2
+
     y_proj_input = None
     y_targ_input = None
     if args.npart:
@@ -1302,6 +1284,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f" input_frame={args.input_frame}")
     print(f" analysis_frame=cm")
     print(f" y_analysis = y_input - ({y_shift:.6f})")
+    if pt_y_min is not None:
+        print(f" pT rapidity window: {pt_y_min:.4f} < y < {pt_y_max:.4f}  (--pt-y-min/--pt-y-max)")
+    else:
+        print(f" pT rapidity window: |y| < {args.ycut:.4f}  (symmetric, --ycut)")
     print(f" k0_mode={k0_mode} (requested={requested_k0_mode})")
     if k0_info.get("scanned_events"):
         print(f" k0_prescan: events={k0_info['scanned_events']} N_310={k0_info['n_310']} N_311={k0_info['n_311']} N_-311={k0_info['n_m311']}")
@@ -1322,6 +1308,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         y_max=args.y_max,
         k0_mode=k0_mode,
         selected_event_ids=selected_event_ids,
+        pt_y_min=pt_y_min,
+        pt_y_max=pt_y_max,
         y_proj_input=y_proj_input,
         y_targ_input=y_targ_input,
         y_spec_tol=args.y_spec_tol,
@@ -1345,9 +1333,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     neutral_scale = res.get("neutral_scale", 1.0)
     k0s_total = neutral_scale * res["total_yield"]["K0S"]
     k0s_window = neutral_scale * res["yield_in_window"]["K0S"]
+    lo = res.get("pt_y_lo")
+    hi = res.get("pt_y_hi")
     print(f" totals: K+={res['total_yield']['Kplus']} K-={res['total_yield']['Kminus']} K0S_equiv={k0s_total:g}")
     print(f" neutral raw counts used for K0S_equiv: {res['total_yield']['K0S']} (scale={neutral_scale:g}, codes={res['k0s_codes']})")
-    print(f" in |y_analysis|<{args.ycut}: K+={res['yield_in_window']['Kplus']} K-={res['yield_in_window']['Kminus']} K0S_equiv={k0s_window:g}")
+    print(f" in pT window [{lo:.4f},{hi:.4f}): K+={res['yield_in_window']['Kplus']} K-={res['yield_in_window']['Kminus']} K0S_equiv={k0s_window:g}")
     if res.get("npart_enabled"):
         print(f" mean_Nspec={res['mean_nspec']:.2f} +/- {res['std_nspec']:.2f}  (N_part = A_proj + A_targ - mean_Nspec)")
     normalize = not args.no_normalize
