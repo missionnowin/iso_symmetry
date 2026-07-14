@@ -40,6 +40,8 @@ Outputs per system (all as .eps + .png), e.g. for Ar+Sc:
   ArSc_11p9GeV_pan_ratio_y_mod.{eps,png}
   ArSc_11p9GeV_dn_rap_overlay_unmod.{eps,png}     -- UrQMD dn/dy (single variant) vs NA61/SHINE dn/dy
   ArSc_11p9GeV_dn_rap_overlay_mod.{eps,png}
+  ArSc_11p9GeV_dn_rap_overlay_ratio_y_unmod.{eps,png} -- TWO-PANEL: dn/dy overlay (top) + R_K(y) (bottom)
+  ArSc_11p9GeV_dn_rap_overlay_ratio_y_mod.{eps,png}
   ArSc_11p9GeV_dn_pt_overlay_unmod.{eps,png}      -- UrQMD dn/dpT + R(pT) (single variant) vs dn/dpT
   ArSc_11p9GeV_dn_pt_overlay_mod.{eps,png}
   ArSc_11p9GeV_k0s_2d_combined_overlay.{eps,png}  -- K0S d2n/dydpT vs exp
@@ -96,6 +98,14 @@ Two-panel combined figure (UrQMD only, no experimental data):
   top panel:    dn/dy vs y  -- (K++K-)/2 and K0S  (mirrors dn_rap_plain)
   bottom panel: R_K(y) = (K++K-)/2 / K0S vs y  (mirrors pan_ratio_y)
 Layout mirrors dn_pt_plain: height_ratios [2.5, 1], sharex=True, hspace=0.05.
+
+dn_rap_overlay_ratio_y note
+---------------------------------
+Two-panel combined figure WITH experimental data in the top panel:
+  top panel:    dn/dy vs y -- UrQMD K0S + (K++K-)/2 overlaid with NA61/SHINE
+  bottom panel: R_K(y) = UrQMD (K++K-)/2 / K0S vs y (UrQMD only, no exp R_K)
+Layout mirrors dn_pt_plain / dn_rap_plain_ratio_y:
+  height_ratios [2.5, 1], sharex=True, hspace=0.05.
 """
 
 from __future__ import annotations
@@ -942,6 +952,100 @@ def make_dn_rap_overlay(
 
 
 # ---------------------------------------------------------------------------
+# dn_rap_overlay_ratio_y -- TWO-PANEL: dn/dy overlay (top) + R_K(y) (bottom)
+# Top panel: UrQMD dn/dy + NA61/SHINE data.  Bottom: UrQMD R_K(y) only.
+# ---------------------------------------------------------------------------
+
+def make_dn_rap_overlay_with_ratio_y(
+    urqmd_dir: Path,
+    hep1a: Path,
+    hep1b: Path,
+    outpath: Path,
+    modified: bool = False,
+) -> None:
+    """
+    Two-panel combined figure:
+      top panel:    dn/dy vs y -- UrQMD K0S + (K++K-)/2 overlaid with NA61/SHINE
+      bottom panel: R_K(y) = UrQMD (K++K-)/2 / K0S vs y (UrQMD only)
+
+    Layout identical to dn_pt_plain / dn_rap_plain_ratio_y:
+      figsize (6.5, 7.5), height_ratios [2.5, 1], hspace 0.05, sharex=True.
+    One figure per variant (unmod/mod).
+    """
+    csv_y = urqmd_dir / "y_distributions_dn.csv"
+    csv_r = urqmd_dir / "ratio_y.csv"
+
+    if not csv_y.exists():
+        print(f"  [warn] {csv_y} not found -- skipping dn_rap_overlay_ratio_y")
+        return
+    if not csv_r.exists():
+        print(f"  [warn] {csv_r} not found -- skipping dn_rap_overlay_ratio_y")
+        return
+
+    data = load_urqmd_dn_y_distributions(csv_y)
+    hy_k0s_x, hy_k0s_y, hy_k0s_ep, hy_k0s_em = load_hepdata(hep1a)
+    hy_kch_x, hy_kch_y, hy_kch_ep, hy_kch_em = load_hepdata(hep1b)
+    yc_r, Rk, Rk_e = load_urqmd_ratio_y(csv_r)
+
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1, figsize=(6.5, 7.5),
+        gridspec_kw={"height_ratios": [2.5, 1], "hspace": 0.05},
+        sharex=True,
+    )
+
+    # --- top panel: dn/dy overlay ---
+    if "K0S" in data:
+        yc, val, err = data["K0S"]
+        ax_top.errorbar(yc, val, yerr=err,
+                        label=_urqmd_overlay_label(r"$K^0_S$", modified),
+                        ls="-", lw=1.4, marker="^", ms=4,
+                        mfc="white", mec="black", color="black",
+                        capsize=2, elinewidth=0.7)
+
+    if "Kplus" in data and "Kminus" in data:
+        yc_p, vp, ep = data["Kplus"]
+        yc_m, vm, em = data["Kminus"]
+        if len(yc_p) == len(yc_m):
+            kch_val = 0.5 * (vp + vm)
+            kch_err = 0.5 * np.sqrt(ep**2 + em**2)
+            ax_top.errorbar(yc_p, kch_val, yerr=kch_err,
+                            label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
+                            ls="--", lw=1.4, marker="o", ms=4,
+                            mfc="white", mec="black", color="black",
+                            capsize=2, elinewidth=0.7)
+
+    ax_top.errorbar(hy_k0s_x, hy_k0s_y, yerr=[hy_k0s_em, hy_k0s_ep],
+                    label=r"NA61/SHINE $K^0_S$", **STYLE["exp_k0s"])
+    ax_top.errorbar(hy_kch_x, hy_kch_y, yerr=[hy_kch_em, hy_kch_ep],
+                    label=r"NA61/SHINE $(K^+ {+} K^-)/2$", **STYLE["exp_kch"])
+
+    ax_top.yaxis.set_minor_locator(AutoMinorLocator())
+    ax_top.set_ylabel(r"$dn/dy$")
+    ax_top.legend(loc="upper right", fontsize=8)
+    ax_top.tick_params(labelbottom=False)
+
+    # --- bottom panel: R_K(y) ---
+    ax_bot.axhline(1.0, ls=":", lw=0.9, color="black")
+    finite = np.isfinite(Rk)
+    if finite.any():
+        ax_bot.errorbar(yc_r[finite], Rk[finite], yerr=Rk_e[finite],
+                        label=_urqmd_ratio_label(modified),
+                        capsize=1.5, elinewidth=0.7, **STYLE["ratio_y"])
+
+    ax_bot.set_xlabel(r"$y$")
+    ax_bot.set_ylabel(r"$R_K(y)$")
+    ax_bot.xaxis.set_minor_locator(AutoMinorLocator())
+    ax_bot.yaxis.set_minor_locator(AutoMinorLocator())
+    ax_bot.legend(loc="upper right", fontsize=8)
+
+    fig.align_ylabels([ax_top, ax_bot])
+    fig.tight_layout()
+    _save(fig, outpath)
+    plt.close(fig)
+    print(f"  wrote {outpath.with_suffix('.eps')}")
+
+
+# ---------------------------------------------------------------------------
 # dn_pt_overlay -- UrQMD dn/dpT (single variant) vs NA61/SHINE dn/dpT
 # Both sides are dn -- no rescaling needed.
 # ---------------------------------------------------------------------------
@@ -978,7 +1082,6 @@ def make_dn_pt_overlay(
             k0s_i_e = np.interp(kch[0], k0s[0], k0s[2], left=np.nan, right=np.nan)
             R_dn    = np.where(k0s_i > 0, kch[1] / k0s_i, np.nan)
             pt_r    = kch[0]
-            # statistical error on the UrQMD ratio via error propagation
             kch_safe = np.where(kch[1] > 0, kch[1], np.nan)
             R_dn_err = np.abs(R_dn) * np.sqrt(
                 (kch[2] / kch_safe) ** 2 + (k0s_i_e / np.where(k0s_i > 0, k0s_i, np.nan)) ** 2
@@ -1417,6 +1520,14 @@ def process_system(
                             sys_def.out(outdir, "dn_rap_overlay", mod=False), modified=False)
         make_dn_rap_overlay(mod_dir,   hep1a, hep1b,
                             sys_def.out(outdir, "dn_rap_overlay", mod=True),  modified=True)
+
+        print("  dn/dy overlay + R_K(y) combined (two-panel)...")
+        make_dn_rap_overlay_with_ratio_y(
+            unmod_dir, hep1a, hep1b,
+            sys_def.out(outdir, "dn_rap_overlay_ratio_y", mod=False), modified=False)
+        make_dn_rap_overlay_with_ratio_y(
+            mod_dir,   hep1a, hep1b,
+            sys_def.out(outdir, "dn_rap_overlay_ratio_y", mod=True),  modified=True)
 
         print("  dn/dpT overlay (single variant per file, linear+R)...")
         make_dn_pt_overlay(unmod_dir, hep2a, hep2b,
