@@ -444,6 +444,58 @@ def _save(fig, base_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Statistical-error band helper (black-and-white, PAN-compliant)
+# ---------------------------------------------------------------------------
+#
+# The UrQMD modelling is drawn as a continuous line (solid for K0S, dashed for
+# (K++K-)/2), so its bin-by-bin MC statistical error is shown as a HATCHED
+# band hugging the line -- no solid fill and no color, so it stays PAN B&W and
+# never merges with the solid-grey NA61/SHINE experimental band.  On a falling
+# spectrum the fractional error is small near the peak and grows in the tail;
+# the hatch texture keeps it legible without turning the curve into points.
+
+def _stat_hatch_band(
+    ax,
+    x: np.ndarray,
+    y: np.ndarray,
+    yerr: np.ndarray,
+    *,
+    hatch: str = "////",
+    nsigma: float = 1.0,
+    log_safe: bool = False,
+    label: Optional[str] = None,
+) -> None:
+    """Shade a +/- nsigma statistical band with black hatching (no fill).
+
+    Only finite points with a positive error contribute.  ``log_safe`` clips
+    the lower edge to a small positive fraction of y so the band renders on a
+    log-scaled axis.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    yerr = np.asarray(yerr, dtype=float)
+    if x.size == 0 or yerr.size != y.size:
+        return
+    finite = np.isfinite(x) & np.isfinite(y) & np.isfinite(yerr) & (yerr > 0)
+    if not finite.any():
+        return
+    xf = x[finite]
+    yf = y[finite]
+    ef = nsigma * yerr[finite]
+    lo = yf - ef
+    hi = yf + ef
+    if log_safe:
+        floor = np.where(yf > 0, yf * 1e-3, 0.0)
+        lo = np.maximum(lo, floor)
+    ax.fill_between(
+        xf, lo, hi,
+        facecolor="none", edgecolor="black",
+        hatch=hatch, linewidth=0.0, zorder=1.5,
+        label=label,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Legend label helpers
 # ---------------------------------------------------------------------------
 
@@ -454,7 +506,7 @@ def _urqmd_overlay_label(species_tex: str, modified: bool) -> str:
 
 def _urqmd_ratio_label(modified: bool) -> str:
     base = r"UrQMD(3:1)" if modified else r"UrQMD"
-    return base
+    return base + r" (statistical uncertainty)"
 
 
 # ---------------------------------------------------------------------------
@@ -804,7 +856,7 @@ def make_pan_ratio_y(urqmd_dir: Path, outpath: Path) -> None:
     ax.axhline(1.0, ls=":", lw=0.9, color="black")
     if finite.any():
         ax.errorbar(yc[finite], Rk[finite], yerr=Rk_e[finite],
-                    label=r"$R_K(y)$",
+                    label=r"$R_K(y)$ (statistical uncertainty)",
                     capsize=1.5, elinewidth=0.7, **STYLE["ratio_y"])
     ax.set_xlabel(r"$y$")
     ax.set_ylabel(r"$R_K(y)$")
@@ -937,10 +989,13 @@ def make_dn_pt_overlay(
     )
 
     if len(k0s[1]) > 0:
+        _stat_hatch_band(ax_top, k0s[0], k0s[1], k0s[2])
         ax_top.plot(k0s[0], k0s[1],
                     label=_urqmd_overlay_label(r"$K^0_S$", modified),
                     **STYLE["urqmd_k0s"])
     if len(kch[1]) > 0:
+        _stat_hatch_band(ax_top, kch[0], kch[1], kch[2],
+                         label=r"UrQMD statistical uncertainty")
         ax_top.plot(kch[0], kch[1],
                     label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
                     **STYLE["urqmd_kch"])
@@ -1164,10 +1219,13 @@ def make_dn_pt_plain(
     )
 
     if len(k0s[1]) > 0:
+        _stat_hatch_band(ax_top, k0s[0], k0s[1], k0s[2])
         ax_top.plot(k0s[0], k0s[1],
                     label=_urqmd_overlay_label(r"$K^0_S$", modified),
                     **STYLE["urqmd_k0s"])
     if len(kch[1]) > 0:
+        _stat_hatch_band(ax_top, kch[0], kch[1], kch[2],
+                         label=r"UrQMD statistical uncertainty")
         ax_top.plot(kch[0], kch[1],
                     label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
                     **STYLE["urqmd_kch"])
