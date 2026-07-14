@@ -1256,7 +1256,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--centrality-top-fraction", type=float, default=None, help="Keep only the top fraction of events ranked by charged-particle activity, e.g. 0.10 for top 10% most active events.")
     parser.add_argument("--centrality-activity-ymax", type=float, default=None, help="Optional |y| acceptance used when defining event activity. If omitted, all charged particles are counted.")
     # wounded-nucleon options
-    parser.add_argument("--npart", action="store_true", help="Enable wounded-nucleon (N_part) estimation via spectator subtraction from f19 momenta.")
+    parser.add_argument("--npart", action="store_true", default=True, help="Enable wounded-nucleon (N_part) estimation via spectator subtraction from f19 momenta.")
     parser.add_argument("--y-spec-tol", type=float, default=0.5, help="Rapidity half-window for spectator identification (default: 0.5).")
     parser.add_argument("--pt-spec-max", type=float, default=0.2, help="Maximum pT [GeV/c] for spectator nucleons (default: 0.2).")
     return parser.parse_args(argv)

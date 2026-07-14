@@ -555,7 +555,8 @@ def _apply_ratio_band(
                 pt_fine[finite_b],
                 (R_fit - R_sigma)[finite_b],
                 (R_fit + R_sigma)[finite_b],
-                alpha=0.35, color="black", label=r"NA61/SHINE",
+                color="0.65",
+                label=r"NA61/SHINE",
             )
     else:
         print("  [warn] Boltzmann fit failed -- falling back to bin-by-bin R(pT) errors")
