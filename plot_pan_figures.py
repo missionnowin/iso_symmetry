@@ -462,6 +462,59 @@ def _save(fig, base_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Statistical-error band helper for UrQMD modelling curves
+# ---------------------------------------------------------------------------
+#
+# The UrQMD CSVs already carry bin-by-bin MC statistical (Poisson) errors.
+# In the overlay / plain / 2D figures the modelling is drawn as continuous
+# black lines, so instead of error bars (which clutter a line) we shade a
+# +/- n_sigma statistical band "hugging" the modelling line.  This keeps the
+# grayscale PAN style readable while making the MC statistical uncertainty
+# visible next to the modelling points.
+
+def _stat_band(
+    ax,
+    x: np.ndarray,
+    y: np.ndarray,
+    yerr: np.ndarray,
+    *,
+    color: str = "black",
+    alpha: float = 0.18,
+    nsigma: float = 1.0,
+    log_safe: bool = False,
+    label: Optional[str] = None,
+) -> None:
+    """Shade a +/- nsigma statistical band around a UrQMD modelling line.
+
+    x, y, yerr are the bin centers, values and (statistical) errors from the
+    analyzer CSVs.  Only finite points with a positive error contribute.
+    ``log_safe`` clips the lower edge to a small positive fraction of y so the
+    band renders correctly on a log-scaled axis.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    yerr = np.asarray(yerr, dtype=float)
+    if x.size == 0 or yerr.size != y.size:
+        return
+    finite = np.isfinite(x) & np.isfinite(y) & np.isfinite(yerr) & (yerr > 0)
+    if not finite.any():
+        return
+    xf = x[finite]
+    yf = y[finite]
+    ef = nsigma * yerr[finite]
+    lo = yf - ef
+    hi = yf + ef
+    if log_safe:
+        floor = np.where(yf > 0, yf * 1e-3, 0.0)
+        lo = np.maximum(lo, floor)
+    ax.fill_between(
+        xf, lo, hi,
+        color=color, alpha=alpha, lw=0, zorder=1,
+        label=label,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Legend label helpers
 # ---------------------------------------------------------------------------
 
@@ -606,6 +659,9 @@ def make_rap_overlay(
     hy_kch_x, hy_kch_y, hy_kch_ep, hy_kch_em = load_hepdata(hep1b)
 
     fig, ax = plt.subplots(figsize=(6.5, 5.0))
+    _stat_band(ax, yc, k0s_vals, k0s_err)
+    _stat_band(ax, yc, kch_vals, kch_err,
+               label=r"UrQMD stat. err. ($\pm1\sigma$)")
     ax.plot(yc, k0s_vals,
             label=_urqmd_overlay_label(r"$K^0_S$", modified),
             **STYLE["urqmd_k0s"])
@@ -644,9 +700,9 @@ def make_pt_overlay(
     Single variant per figure.
     """
     pt_data = load_urqmd_pt_spectra(urqmd_dir / "pt_spectra.csv")
-    pt_r, R_urqmd, _ = load_urqmd_ratio_pt(urqmd_dir / "ratio_pt.csv")
+    pt_r, R_urqmd, R_urqmd_err = load_urqmd_ratio_pt(urqmd_dir / "ratio_pt.csv")
 
-    k0s_pt, k0s_val, _e     = pt_data.get("K0S",    (np.array([]),)*3)
+    k0s_pt, k0s_val, k0s_err = pt_data.get("K0S",    (np.array([]),)*3)
     kp_pt,  kp_val,  kp_err = pt_data.get("Kplus",  (np.array([]),)*3)
     km_pt,  km_val,  km_err = pt_data.get("Kminus", (np.array([]),)*3)
 
@@ -667,10 +723,13 @@ def make_pt_overlay(
     )
 
     if len(k0s_val) > 0:
+        _stat_band(ax_top, k0s_pt, k0s_val, k0s_err, log_safe=False)
         ax_top.plot(k0s_pt, k0s_val,
                     label=_urqmd_overlay_label(r"$K^0_S$", modified),
                     **STYLE["urqmd_k0s"])
     if len(kch_val) > 0:
+        _stat_band(ax_top, kch_pt, kch_val, kch_err, log_safe=False,
+                   label=r"UrQMD stat. err. ($\pm1\sigma$)")
         ax_top.plot(kch_pt, kch_val,
                     label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
                     **STYLE["urqmd_kch"])
@@ -687,6 +746,7 @@ def make_pt_overlay(
     ax_bot.axhline(1.0, ls=":", lw=0.9, color="black")
     finite_u = np.isfinite(R_urqmd)
     if finite_u.any():
+        _stat_band(ax_bot, pt_r, R_urqmd, R_urqmd_err)
         ax_bot.plot(pt_r[finite_u], R_urqmd[finite_u],
                     label=_urqmd_ratio_label(modified), **STYLE["ratio_urqmd"])
     _apply_ratio_band(ax_bot,
@@ -813,11 +873,13 @@ def make_pan_dn_pt_species(urqmd_dir: Path, outpath: Path) -> None:
 
 def make_pan_ratio_y(urqmd_dir: Path, outpath: Path) -> None:
     """PAN-style R_K(y) = 0.5*(K++K-)/K0S vs y. No title."""
-    yc, Rk, _Rk_e = load_urqmd_ratio_y(urqmd_dir / "ratio_y.csv")
+    yc, Rk, Rk_e = load_urqmd_ratio_y(urqmd_dir / "ratio_y.csv")
     fig, ax = plt.subplots(figsize=(6.5, 4.5))
     finite = np.isfinite(Rk)
     ax.axhline(1.0, ls=":", lw=0.9, color="black")
     if finite.any():
+        _stat_band(ax, yc, Rk, Rk_e,
+                   label=r"stat. err. ($\pm1\sigma$)")
         ax.plot(yc[finite], Rk[finite], label=r"$R_K(y)$", **STYLE["ratio_y"])
     ax.set_xlabel(r"$y$")
     ax.set_ylabel(r"$R_K(y)$")
@@ -926,12 +988,19 @@ def make_dn_pt_overlay(
 
     with np.errstate(invalid="ignore", divide="ignore"):
         if len(kch[0]) > 0 and len(k0s[0]) > 0:
-            k0s_i = np.interp(kch[0], k0s[0], k0s[1], left=np.nan, right=np.nan)
-            R_dn  = np.where(k0s_i > 0, kch[1] / k0s_i, np.nan)
-            pt_r  = kch[0]
+            k0s_i   = np.interp(kch[0], k0s[0], k0s[1], left=np.nan, right=np.nan)
+            k0s_i_e = np.interp(kch[0], k0s[0], k0s[2], left=np.nan, right=np.nan)
+            R_dn    = np.where(k0s_i > 0, kch[1] / k0s_i, np.nan)
+            pt_r    = kch[0]
+            # statistical error on the UrQMD ratio via error propagation
+            kch_safe = np.where(kch[1] > 0, kch[1], np.nan)
+            R_dn_err = np.abs(R_dn) * np.sqrt(
+                (kch[2] / kch_safe) ** 2 + (k0s_i_e / np.where(k0s_i > 0, k0s_i, np.nan)) ** 2
+            )
         else:
             pt_r = np.array([])
             R_dn = np.array([])
+            R_dn_err = np.array([])
 
     hep2a_x, hep2a_y, hep2a_ep, hep2a_em = load_hepdata(hep2a)
     hep2b_x, hep2b_y, hep2b_ep, hep2b_em = load_hepdata(hep2b)
@@ -943,10 +1012,13 @@ def make_dn_pt_overlay(
     )
 
     if len(k0s[1]) > 0:
+        _stat_band(ax_top, k0s[0], k0s[1], k0s[2])
         ax_top.plot(k0s[0], k0s[1],
                     label=_urqmd_overlay_label(r"$K^0_S$", modified),
                     **STYLE["urqmd_k0s"])
     if len(kch[1]) > 0:
+        _stat_band(ax_top, kch[0], kch[1], kch[2],
+                   label=r"UrQMD stat. err. ($\pm1\sigma$)")
         ax_top.plot(kch[0], kch[1],
                     label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
                     **STYLE["urqmd_kch"])
@@ -963,6 +1035,7 @@ def make_dn_pt_overlay(
     ax_bot.axhline(1.0, ls=":", lw=0.9, color="black")
     finite_r = np.isfinite(R_dn)
     if finite_r.any():
+        _stat_band(ax_bot, pt_r, R_dn, R_dn_err)
         ax_bot.plot(pt_r[finite_r], R_dn[finite_r],
                     label=_urqmd_ratio_label(modified), **STYLE["ratio_urqmd"])
     _apply_ratio_band(ax_bot,
@@ -1025,17 +1098,20 @@ def make_k0s_2d_combined_overlay(
 
         res_unmod = _load_urqmd_k0s_pt_in_ybin(unmod_dir, y_lo, y_hi, use_dn=True)
         if res_unmod is not None:
-            pt_u, d2n_u, _ = res_unmod
+            pt_u, d2n_u, d2n_u_err = res_unmod
             finite_u = np.isfinite(d2n_u)
             if finite_u.any():
+                _stat_band(ax, pt_u, d2n_u, d2n_u_err, log_safe=True,
+                           label=(r"UrQMD stat. err. ($\pm1\sigma$)" if idx == 0 else None))
                 ax.plot(pt_u[finite_u], d2n_u[finite_u],
                         label=r"UrQMD", **STYLE["fig7_urqmd_unmod"])
 
         res_mod = _load_urqmd_k0s_pt_in_ybin(mod_dir, y_lo, y_hi, use_dn=True)
         if res_mod is not None:
-            pt_m, d2n_m, _ = res_mod
+            pt_m, d2n_m, d2n_m_err = res_mod
             finite_m = np.isfinite(d2n_m)
             if finite_m.any():
+                _stat_band(ax, pt_m, d2n_m, d2n_m_err, log_safe=True)
                 ax.plot(pt_m[finite_m], d2n_m[finite_m],
                         label=r"UrQMD(3:1)", **STYLE["fig7_urqmd_mod"])
 
@@ -1147,12 +1223,18 @@ def make_dn_pt_plain(
 
     with np.errstate(invalid="ignore", divide="ignore"):
         if len(kch[0]) > 0 and len(k0s[0]) > 0:
-            k0s_i = np.interp(kch[0], k0s[0], k0s[1], left=np.nan, right=np.nan)
-            R_dn  = np.where(k0s_i > 0, kch[1] / k0s_i, np.nan)
-            pt_r  = kch[0]
+            k0s_i   = np.interp(kch[0], k0s[0], k0s[1], left=np.nan, right=np.nan)
+            k0s_i_e = np.interp(kch[0], k0s[0], k0s[2], left=np.nan, right=np.nan)
+            R_dn    = np.where(k0s_i > 0, kch[1] / k0s_i, np.nan)
+            pt_r    = kch[0]
+            kch_safe = np.where(kch[1] > 0, kch[1], np.nan)
+            R_dn_err = np.abs(R_dn) * np.sqrt(
+                (kch[2] / kch_safe) ** 2 + (k0s_i_e / np.where(k0s_i > 0, k0s_i, np.nan)) ** 2
+            )
         else:
             pt_r = np.array([])
             R_dn = np.array([])
+            R_dn_err = np.array([])
 
     fig, (ax_top, ax_bot) = plt.subplots(
         2, 1, figsize=(6.5, 7.5),
@@ -1161,10 +1243,13 @@ def make_dn_pt_plain(
     )
 
     if len(k0s[1]) > 0:
+        _stat_band(ax_top, k0s[0], k0s[1], k0s[2])
         ax_top.plot(k0s[0], k0s[1],
                     label=_urqmd_overlay_label(r"$K^0_S$", modified),
                     **STYLE["urqmd_k0s"])
     if len(kch[1]) > 0:
+        _stat_band(ax_top, kch[0], kch[1], kch[2],
+                   label=r"UrQMD stat. err. ($\pm1\sigma$)")
         ax_top.plot(kch[0], kch[1],
                     label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
                     **STYLE["urqmd_kch"])
@@ -1177,6 +1262,7 @@ def make_dn_pt_plain(
     ax_bot.axhline(1.0, ls=":", lw=0.9, color="black")
     finite_r = np.isfinite(R_dn)
     if finite_r.any():
+        _stat_band(ax_bot, pt_r, R_dn, R_dn_err)
         ax_bot.plot(pt_r[finite_r], R_dn[finite_r],
                     label=_urqmd_ratio_label(modified), **STYLE["ratio_urqmd"])
 
