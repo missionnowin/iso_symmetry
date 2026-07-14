@@ -47,6 +47,8 @@ Outputs per system (all as .eps + .png), e.g. for Ar+Sc:
   ArSc_11p9GeV_dn_rap_plain_mod.{eps,png}
   ArSc_11p9GeV_dn_pt_plain_unmod.{eps,png}        -- UrQMD dn/dpT + R(pT): (K++K-)/2 vs K0S only (no exp)
   ArSc_11p9GeV_dn_pt_plain_mod.{eps,png}
+  ArSc_11p9GeV_dn_rap_plain_ratio_y_unmod.{eps,png} -- TWO-PANEL: dn/dy (top) + R_K(y) (bottom), UrQMD only
+  ArSc_11p9GeV_dn_rap_plain_ratio_y_mod.{eps,png}
 
 NOTE: energy_str uses 'p' instead of '.' (e.g. 11p9GeV) to avoid
 Windows treating the decimal as a file extension separator.
@@ -87,6 +89,13 @@ These plots show only UrQMD simulation results -- (K++K-)/2 and K0S --
 with NO experimental data overlaid.  One figure per variant (unmod/mod).
 dn_rap_plain: single panel, dn/dy vs y.
 dn_pt_plain:  two-panel -- dn/dpT linear (top) + R(pT) = (K++K-)/2 / K0S (bottom).
+
+dn_rap_plain_ratio_y note
+---------------------------------
+Two-panel combined figure (UrQMD only, no experimental data):
+  top panel:    dn/dy vs y  -- (K++K-)/2 and K0S  (mirrors dn_rap_plain)
+  bottom panel: R_K(y) = (K++K-)/2 / K0S vs y  (mirrors pan_ratio_y)
+Layout mirrors dn_pt_plain: height_ratios [2.5, 1], sharex=True, hspace=0.05.
 """
 
 from __future__ import annotations
@@ -1253,6 +1262,91 @@ def make_dn_pt_plain(
 
 
 # ---------------------------------------------------------------------------
+# dn_rap_plain_ratio_y -- TWO-PANEL: dn/dy (top) + R_K(y) (bottom)
+# Mirrors dn_pt_plain layout.  UrQMD only, no experimental data.
+# ---------------------------------------------------------------------------
+
+def make_dn_rap_plain_with_ratio_y(
+    urqmd_dir: Path,
+    outpath: Path,
+    modified: bool = False,
+) -> None:
+    """
+    Two-panel combined figure (UrQMD only, no experimental data):
+      top panel:    dn/dy vs y -- K0S (solid) and (K++K-)/2 (dashed)
+      bottom panel: R_K(y) = (K++K-)/2 / K0S vs y with dotted reference at 1
+
+    Layout mirrors make_dn_pt_plain:
+      figsize (6.5, 7.5), height_ratios [2.5, 1], hspace 0.05, sharex=True.
+    One figure per variant (unmod/mod).
+    """
+    csv_y = urqmd_dir / "y_distributions_dn.csv"
+    csv_r = urqmd_dir / "ratio_y.csv"
+
+    if not csv_y.exists():
+        print(f"  [warn] {csv_y} not found -- skipping dn_rap_plain_ratio_y")
+        return
+    if not csv_r.exists():
+        print(f"  [warn] {csv_r} not found -- skipping dn_rap_plain_ratio_y")
+        return
+
+    data = load_urqmd_dn_y_distributions(csv_y)
+    yc_r, Rk, Rk_e = load_urqmd_ratio_y(csv_r)
+
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1, figsize=(6.5, 7.5),
+        gridspec_kw={"height_ratios": [2.5, 1], "hspace": 0.05},
+        sharex=True,
+    )
+
+    # --- top panel: dn/dy ---
+    if "K0S" in data:
+        yc, val, err = data["K0S"]
+        ax_top.errorbar(yc, val, yerr=err,
+                        label=_urqmd_overlay_label(r"$K^0_S$", modified),
+                        ls="-", lw=1.4, marker="^", ms=4,
+                        mfc="white", mec="black", color="black",
+                        capsize=2, elinewidth=0.7)
+
+    if "Kplus" in data and "Kminus" in data:
+        yc_p, vp, ep = data["Kplus"]
+        yc_m, vm, em = data["Kminus"]
+        if len(yc_p) == len(yc_m):
+            kch_val = 0.5 * (vp + vm)
+            kch_err = 0.5 * np.sqrt(ep**2 + em**2)
+            ax_top.errorbar(yc_p, kch_val, yerr=kch_err,
+                            label=_urqmd_overlay_label(r"$(K^+ {+} K^-)/2$", modified),
+                            ls="--", lw=1.4, marker="o", ms=4,
+                            mfc="white", mec="black", color="black",
+                            capsize=2, elinewidth=0.7)
+
+    ax_top.yaxis.set_minor_locator(AutoMinorLocator())
+    ax_top.set_ylabel(r"$dn/dy$")
+    ax_top.legend(loc="upper right", fontsize=8)
+    ax_top.tick_params(labelbottom=False)
+
+    # --- bottom panel: R_K(y) ---
+    ax_bot.axhline(1.0, ls=":", lw=0.9, color="black")
+    finite = np.isfinite(Rk)
+    if finite.any():
+        ax_bot.errorbar(yc_r[finite], Rk[finite], yerr=Rk_e[finite],
+                        label=_urqmd_ratio_label(modified),
+                        capsize=1.5, elinewidth=0.7, **STYLE["ratio_y"])
+
+    ax_bot.set_xlabel(r"$y$")
+    ax_bot.set_ylabel(r"$R_K(y)$")
+    ax_bot.xaxis.set_minor_locator(AutoMinorLocator())
+    ax_bot.yaxis.set_minor_locator(AutoMinorLocator())
+    ax_bot.legend(loc="upper right", fontsize=8)
+
+    fig.align_ylabels([ax_top, ax_bot])
+    fig.tight_layout()
+    _save(fig, outpath)
+    plt.close(fig)
+    print(f"  wrote {outpath.with_suffix('.eps')}")
+
+
+# ---------------------------------------------------------------------------
 # Per-system driver
 # ---------------------------------------------------------------------------
 
@@ -1346,6 +1440,12 @@ def process_system(
     print("  dn/dpT plain UrQMD-only: (K++K-)/2 vs K0S + R(pT)...")
     make_dn_pt_plain(unmod_dir, sys_def.out(outdir, "dn_pt_plain", mod=False), modified=False)
     make_dn_pt_plain(mod_dir,   sys_def.out(outdir, "dn_pt_plain", mod=True),  modified=True)
+
+    print("  dn/dy + R_K(y) combined plain UrQMD-only (two-panel)...")
+    make_dn_rap_plain_with_ratio_y(
+        unmod_dir, sys_def.out(outdir, "dn_rap_plain_ratio_y", mod=False), modified=False)
+    make_dn_rap_plain_with_ratio_y(
+        mod_dir,   sys_def.out(outdir, "dn_rap_plain_ratio_y", mod=True),  modified=True)
 
 
 # ---------------------------------------------------------------------------
