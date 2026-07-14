@@ -170,6 +170,10 @@ STYLE = {
     "ratio_exp":   dict(ls="None", marker="^", ms=5,
                         mfc="black", mec="black", color="black",
                         capsize=3, elinewidth=0.8),
+    # experimental R_K(y) in the rapidity-ratio bottom panel
+    "ratio_exp_y": dict(ls="None", marker="^", ms=5,
+                        mfc="white", mec="black", color="black",
+                        capsize=3, elinewidth=0.8),
     # PAN-only species
     "Kplus":  dict(ls="-",  lw=1.3, marker="o", ms=4,
                    mfc="white", mec="black", color="black"),
@@ -639,6 +643,36 @@ def _apply_ratio_band(
                         yerr=R_err_fb[finite_e],
                         label=r"NA61/SHINE", **STYLE["ratio_exp"])
 
+# ---------------------------------------------------------------------------
+# Experimental R_K(y) helper -- bin-by-bin ratio from Figure1b / Figure1a
+# ---------------------------------------------------------------------------
+
+def _apply_exp_ratio_y(
+    ax,
+    hep1a_x, hep1a_y, hep1a_ep, hep1a_em,
+    hep1b_x, hep1b_y, hep1b_ep, hep1b_em,
+) -> None:
+    kch_y  = np.interp(hep1a_x, hep1b_x, hep1b_y,  left=np.nan, right=np.nan)
+    kch_ep = np.interp(hep1a_x, hep1b_x, hep1b_ep, left=np.nan, right=np.nan)
+    kch_em = np.interp(hep1a_x, hep1b_x, hep1b_em, left=np.nan, right=np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        R_exp = np.where(hep1a_y > 0, kch_y / hep1a_y, np.nan)
+        R_exp_ep = np.abs(R_exp) * np.sqrt(
+            (kch_ep  / np.where(kch_y   > 0, kch_y,   np.nan)) ** 2 +
+            (hep1a_ep / np.where(hep1a_y > 0, hep1a_y, np.nan)) ** 2
+        )
+        R_exp_em = np.abs(R_exp) * np.sqrt(
+            (kch_em  / np.where(kch_y   > 0, kch_y,   np.nan)) ** 2 +
+            (hep1a_em / np.where(hep1a_y > 0, hep1a_y, np.nan)) ** 2
+        )
+    finite = np.isfinite(R_exp)
+    if finite.any():
+        ax.errorbar(
+            hep1a_x[finite], R_exp[finite],
+            yerr=[R_exp_em[finite], R_exp_ep[finite]],
+            label=r"NA61/SHINE",
+            **STYLE["ratio_exp_y"],
+        )
 
 # ---------------------------------------------------------------------------
 # rap_overlay -- UrQMD dN/dy (single variant) vs NA61/SHINE dn/dy
@@ -1031,6 +1065,12 @@ def make_dn_rap_overlay_with_ratio_y(
         ax_bot.errorbar(yc_r[finite], Rk[finite], yerr=Rk_e[finite],
                         label=_urqmd_ratio_label(modified),
                         capsize=1.5, elinewidth=0.7, **STYLE["ratio_y"])
+    
+    _apply_exp_ratio_y(
+        ax_bot,
+        hy_k0s_x, hy_k0s_y, hy_k0s_ep, hy_k0s_em,
+        hy_kch_x, hy_kch_y, hy_kch_ep, hy_kch_em,
+    )
 
     ax_bot.set_xlabel(r"$y$")
     ax_bot.set_ylabel(r"$R_K(y)$")
